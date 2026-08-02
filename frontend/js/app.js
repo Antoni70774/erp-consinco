@@ -258,6 +258,7 @@ const VIEW_TITLES = {
   categorias: ['Categorias de Produto', 'Cadastros'],
   produtos: ['Produtos', 'Cadastros · Cadastro Completo com Dados Fiscais'],
   compras: ['Compras', 'Operacional'],
+  estoque: ['Estoque', 'Análises · Saldo, Curva ABC, Giro/Cobertura, Ruptura, Kardex'],
   financeiro: ['Financeiro', 'Operacional · Contas a Pagar e a Receber'],
   'tipos-operacao': ['Tipos de Operação (CFOP)', 'Configurações'],
   usuarios: ['Usuários e Senhas', 'Configurações'],
@@ -273,6 +274,7 @@ async function navigate(view) {
   try {
     if (view === 'dashboard') return renderDashboard();
     if (view === 'compras') return renderCompras();
+    if (view === 'estoque') return renderEstoque();
     if (view === 'financeiro') return renderFinanceiro();
     if (CRUD_CONFIGS[view]) return UI.renderCrudView(content, CRUD_CONFIGS[view]);
   } catch (e) {
@@ -492,6 +494,160 @@ async function renderCompras() {
   let t;
   document.getElementById('compraFiltroStatus').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); });
   load();
+}
+
+// -------- View: Estoque (análises) --------
+async function renderEstoque() {
+  content.innerHTML = `
+    <div class="table-toolbar">
+      <label class="field" style="margin:0; min-width:220px">
+        <span>Filtrar por empresa</span>
+        <select id="estoqueFiltroEmpresa"><option value="">Todas as empresas</option></select>
+      </label>
+    </div>
+    <div class="kpi-grid" id="estoqueKpis"></div>
+    <div class="tabs">
+      <div class="tab-btn active" data-tab="saldo">Saldo por Produto</div>
+      <div class="tab-btn" data-tab="abc">Curva ABC</div>
+      <div class="tab-btn" data-tab="giro">Giro &amp; Cobertura</div>
+      <div class="tab-btn" data-tab="ruptura">Ruptura</div>
+      <div class="tab-btn" data-tab="kardex">Kardex</div>
+    </div>
+    <div id="estoqueContent"></div>
+  `;
+
+  const empresas = await optEmpresas();
+  const selEmpresa = document.getElementById('estoqueFiltroEmpresa');
+  selEmpresa.innerHTML += empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('');
+
+  const estoqueContent = document.getElementById('estoqueContent');
+  let abaAtual = 'saldo';
+
+  async function carregarKpis() {
+    const empresaId = selEmpresa.value;
+    const r = await API.get(`/api/estoque/resumo${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    document.getElementById('estoqueKpis').innerHTML = `
+      <div class="kpi-card"><div class="kpi-label">Valor Total em Estoque</div><div class="kpi-value">${UI.fmtMoney(r.valor_total_estoque)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">SKUs com Saldo</div><div class="kpi-value">${r.skus_com_saldo}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Abaixo do Mínimo</div><div class="kpi-value ${r.produtos_abaixo_minimo > 0 ? 'neg' : ''}">${r.produtos_abaixo_minimo}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Produtos Zerados</div><div class="kpi-value ${r.produtos_zerados > 0 ? 'neg' : ''}">${r.produtos_zerados}</div></div>
+    `;
+  }
+
+  async function renderAba() {
+    if (abaAtual === 'saldo') return renderSaldo();
+    if (abaAtual === 'abc') return renderAbc();
+    if (abaAtual === 'giro') return renderGiro();
+    if (abaAtual === 'ruptura') return renderRuptura();
+    if (abaAtual === 'kardex') return renderKardex();
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    abaAtual = btn.dataset.tab;
+    renderAba();
+  }));
+  selEmpresa.addEventListener('change', () => { carregarKpis(); renderAba(); });
+
+  async function renderSaldo() {
+    estoqueContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const empresaId = selEmpresa.value;
+    const dados = await API.get(`/api/estoque/saldo?apenas_com_estoque=true${empresaId ? `&empresa_id=${empresaId}` : ''}`);
+    estoqueContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Produto</th><th>Empresa</th><th>Qtd.</th><th>Vlr. Médio</th><th>Vlr. Total</th><th>Mín.</th><th>Status</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr>
+            <td class="mono">${d.produto_codigo}</td><td>${d.produto_descricao}</td><td>${d.empresa_nome}</td>
+            <td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_medio)}</td>
+            <td class="mono">${UI.fmtMoney(d.valor_total)}</td><td class="mono">${UI.fmtNum(d.estoque_minimo, 0)}</td>
+            <td>${d.abaixo_minimo ? '<span class="tag tag-red">Abaixo mín.</span>' : '<span class="tag tag-green">OK</span>'}</td>
+          </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-title">Nenhum saldo de estoque ainda</div>Receba um pedido de compra para gerar saldo.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderAbc() {
+    estoqueContent.innerHTML = `<div style="color:#9096a8">Calculando curva ABC...</div>`;
+    const empresaId = selEmpresa.value;
+    const dados = await API.get(`/api/estoque/curva-abc${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    const badge = (c) => c === 'A' ? 'tag-green' : c === 'B' ? 'tag-amber' : 'tag-gray';
+    estoqueContent.innerHTML = `
+      <div class="kpi-grid" style="margin-bottom:16px">
+        <div class="kpi-card"><div class="kpi-label">Classe A</div><div class="kpi-value pos">${dados.resumo.A}</div><div class="kpi-sub">até 80% do valor</div></div>
+        <div class="kpi-card"><div class="kpi-label">Classe B</div><div class="kpi-value">${dados.resumo.B}</div><div class="kpi-sub">até 95% do valor</div></div>
+        <div class="kpi-card"><div class="kpi-label">Classe C</div><div class="kpi-value">${dados.resumo.C}</div><div class="kpi-sub">restante</div></div>
+      </div>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Produto</th><th>Valor em Estoque</th><th>% Individual</th><th>% Acumulado</th><th>Classe</th></tr></thead>
+        <tbody>${dados.itens.length ? dados.itens.map(i => `
+          <tr>
+            <td class="mono">${i.codigo}</td><td>${i.descricao}</td><td class="mono">${UI.fmtMoney(i.valor_total)}</td>
+            <td class="mono">${UI.fmtNum(i.percentual_individual, 1)}%</td><td class="mono">${UI.fmtNum(i.percentual_acumulado, 1)}%</td>
+            <td><span class="tag ${badge(i.classe)}">${i.classe}</span></td>
+          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">Sem dados suficientes ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderGiro() {
+    estoqueContent.innerHTML = `<div style="color:#9096a8">Calculando giro...</div>`;
+    const empresaId = selEmpresa.value;
+    const dados = await API.get(`/api/estoque/giro-cobertura?dias=30${empresaId ? `&empresa_id=${empresaId}` : ''}`);
+    estoqueContent.innerHTML = `
+      <p style="color:var(--ink-soft); font-size:12.5px; margin-top:0">Período analisado: últimos ${dados.periodo_dias} dias.</p>
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Produto</th><th>Saldo Atual</th><th>Saída no Período</th><th>Giro</th><th>Cobertura (dias)</th></tr></thead>
+        <tbody>${dados.itens.length ? dados.itens.map(i => `
+          <tr>
+            <td class="mono">${i.codigo}</td><td>${i.descricao}</td><td class="mono">${UI.fmtNum(i.saldo_atual, 2)}</td>
+            <td class="mono">${UI.fmtNum(i.saida_periodo, 2)}</td><td class="mono">${UI.fmtNum(i.giro_periodo, 2)}</td>
+            <td class="mono">${i.cobertura_dias !== null ? UI.fmtNum(i.cobertura_dias, 0) + ' dias' : (i.sem_movimento ? '<span class="tag tag-amber">Sem giro</span>' : '—')}</td>
+          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state">Sem produtos com saldo ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderRuptura() {
+    estoqueContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const empresaId = selEmpresa.value;
+    const dados = await API.get(`/api/estoque/ruptura${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    estoqueContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Produto</th><th>Empresa</th><th>Qtd. Atual</th><th>Mínimo</th><th>Falta</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr>
+            <td class="mono">${d.produto_codigo}</td><td>${d.produto_descricao}</td><td>${d.empresa_nome}</td>
+            <td class="mono">${UI.fmtNum(d.quantidade_atual, 2)}</td><td class="mono">${UI.fmtNum(d.estoque_minimo, 0)}</td>
+            <td class="mono" style="color:var(--red)">${UI.fmtNum(d.falta, 2)}</td>
+          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-state-title">Nenhum produto em ruptura</div>Todos os produtos estão dentro do mínimo definido.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderKardex() {
+    estoqueContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const empresaId = selEmpresa.value;
+    const dados = await API.get(`/api/estoque/kardex?limit=150${empresaId ? `&empresa_id=${empresaId}` : ''}`);
+    const natTag = (n) => n === 'ENTRADA' ? '<span class="tag tag-green">Entrada</span>' : '<span class="tag tag-red">Saída</span>';
+    estoqueContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Data</th><th>Produto</th><th>Operação</th><th>Natureza</th><th>Documento</th><th>Qtd.</th><th>Vlr. Unit.</th><th>Saldo Após</th></tr></thead>
+        <tbody>${dados.length ? dados.map(m => `
+          <tr>
+            <td>${new Date(m.data).toLocaleString('pt-BR')}</td>
+            <td>${m.produto_codigo} · ${m.produto_descricao}</td>
+            <td>${m.tipo_operacao}</td><td>${natTag(m.natureza)}</td>
+            <td class="mono">${m.documento_origem || '—'}</td>
+            <td class="mono">${UI.fmtNum(m.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(m.valor_unitario)}</td>
+            <td class="mono">${m.saldo_apos !== null ? UI.fmtNum(m.saldo_apos, 2) : '—'}</td>
+          </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state">Nenhuma movimentação registrada ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  carregarKpis();
+  renderAba();
 }
 
 // -------- View: Financeiro (contas a pagar / receber) --------
