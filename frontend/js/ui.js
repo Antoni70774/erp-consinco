@@ -38,7 +38,7 @@ UI.openModal = function ({ title, bodyHtml, onMount, footerHtml }) {
     </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) UI.closeModal(); });
-  overlay.querySelector('[data-close]').addEventListener('click', UI.closeModal);
+  overlay.querySelectorAll('[data-close]').forEach(btn => btn.addEventListener('click', UI.closeModal));
   if (onMount) onMount(overlay);
   return overlay;
 };
