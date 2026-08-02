@@ -14,6 +14,7 @@ from sqlalchemy import func
 
 from .. import models, security
 from ..database import get_db
+from ..inventario_lock import verificar_produto_congelado
 
 router = APIRouter(prefix="/api/estoque", tags=["Estoque"], dependencies=[Depends(security.usuario_atual)])
 
@@ -215,6 +216,8 @@ def ajuste_manual(
     tipo = db.get(models.TipoOperacao, tipo_operacao_id)
     if not produto or not tipo:
         raise HTTPException(404, "Produto ou tipo de operação não encontrado")
+
+    verificar_produto_congelado(db, empresa_id, produto_id)
 
     saldo_row = (
         db.query(models.EstoqueSaldo)
