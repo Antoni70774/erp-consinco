@@ -333,3 +333,47 @@ class ContaReceberIn(BaseModel):
 class ContaReceberOut(ContaReceberIn, ORMBase):
     id: int
     criado_em: Optional[datetime] = None
+
+
+# -------- Inventário --------
+class InventarioAbrirIn(BaseModel):
+    empresa_id: int
+    descricao: str
+    tipo_abertura: str = "GERAL"  # PRODUTO, SECAO, GERAL
+    categoria_id: Optional[int] = None
+    produto_ids: Optional[List[int]] = None  # usado quando tipo_abertura = PRODUTO
+    tolerancia_critica_pct: float = 5
+    observacao: Optional[str] = None
+
+
+class InventarioItemOut(ORMBase):
+    id: int
+    produto_id: int
+    quantidade_sistema: float
+    quantidade_contada: Optional[float] = None
+    valor_unitario: Optional[float] = 0
+    diferenca: Optional[float] = None
+    valor_diferenca: Optional[float] = None
+    critica: bool = False
+    critica_motivo: Optional[str] = None
+    contado_em: Optional[datetime] = None
+    ajuste_aplicado: bool = False
+
+
+class InventarioOut(ORMBase):
+    id: int
+    empresa_id: int
+    descricao: str
+    tipo_abertura: str
+    categoria_id: Optional[int] = None
+    status: str
+    tolerancia_critica_pct: Optional[float] = 5
+    data_abertura: Optional[datetime] = None
+    data_congelamento: Optional[datetime] = None
+    data_fechamento: Optional[datetime] = None
+    observacao: Optional[str] = None
+    itens: List[InventarioItemOut] = []
+
+
+class InventarioContagemIn(BaseModel):
+    quantidade_contada: float
