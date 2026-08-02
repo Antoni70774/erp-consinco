@@ -377,3 +377,67 @@ class InventarioOut(ORMBase):
 
 class InventarioContagemIn(BaseModel):
     quantidade_contada: float
+
+
+# -------- Lançamentos operacionais (Consumo / Perda / Avaria) --------
+class LancamentoOperacionalIn(BaseModel):
+    empresa_id: int
+    produto_id: int
+    tipo_operacao_id: int
+    quantidade: float
+    motivo: Optional[str] = None
+    documento_origem: Optional[str] = None
+    fornecedor_id: Optional[int] = None  # relevante principalmente para avarias
+
+
+# -------- Vendas --------
+class VendaItemIn(BaseModel):
+    produto_id: int
+    quantidade: float
+    valor_unitario: float
+    valor_desconto: float = 0
+    valor_total: float
+    cfop: Optional[str] = None
+
+
+class VendaItemOut(VendaItemIn, ORMBase):
+    id: int
+    quantidade_devolvida: float = 0
+
+
+class VendaIn(BaseModel):
+    numero_venda: str
+    empresa_id: int
+    cliente_id: Optional[int] = None
+    tipo_operacao_id: Optional[int] = None
+    data_venda: Optional[datetime] = None
+    valor_desconto: float = 0
+    observacao: Optional[str] = None
+    itens: List[VendaItemIn] = []
+    gerar_financeiro: bool = False
+    dias_vencimento: int = 30
+
+
+class VendaOut(ORMBase):
+    id: int
+    numero_venda: str
+    empresa_id: int
+    cliente_id: Optional[int] = None
+    tipo_operacao_id: Optional[int] = None
+    data_venda: Optional[datetime] = None
+    status: str
+    valor_produtos: Optional[float] = 0
+    valor_desconto: Optional[float] = 0
+    valor_total: Optional[float] = 0
+    observacao: Optional[str] = None
+    itens: List[VendaItemOut] = []
+
+
+class VendaDevolucaoItemIn(BaseModel):
+    item_id: int
+    quantidade: float
+
+
+class VendaDevolucaoIn(BaseModel):
+    itens: List[VendaDevolucaoItemIn]
+    motivo: Optional[str] = None
