@@ -260,6 +260,11 @@ const VIEW_TITLES = {
   compras: ['Compras', 'Operacional'],
   estoque: ['Estoque', 'Análises · Saldo, Curva ABC, Giro/Cobertura, Ruptura, Kardex'],
   inventario: ['Inventário', 'Abertura, Congelamento, Críticas e Fechamento'],
+  consumo: ['Consumo', 'Análises de consumo interno'],
+  perdas: ['Perdas', 'Análises de quebra operacional'],
+  avarias: ['Avarias', 'Produtos avariados · por empresa e fornecedor'],
+  vendas: ['Vendas', 'Análise de produto, comparativos e devoluções'],
+  relatorios: ['Relatórios Avançados', 'Visão consolidada de todos os módulos'],
   financeiro: ['Financeiro', 'Operacional · Contas a Pagar e a Receber'],
   'tipos-operacao': ['Tipos de Operação (CFOP)', 'Configurações'],
   usuarios: ['Usuários e Senhas', 'Configurações'],
@@ -277,6 +282,11 @@ async function navigate(view) {
     if (view === 'compras') return renderCompras();
     if (view === 'estoque') return renderEstoque();
     if (view === 'inventario') return renderInventario();
+    if (view === 'consumo') return renderOperacao('CONSUMO', 'Consumo');
+    if (view === 'perdas') return renderOperacao('PERDA', 'Perdas');
+    if (view === 'avarias') return renderOperacao('AVARIA', 'Avarias');
+    if (view === 'vendas') return renderVendas();
+    if (view === 'relatorios') return renderRelatorios();
     if (view === 'financeiro') return renderFinanceiro();
     if (CRUD_CONFIGS[view]) return UI.renderCrudView(content, CRUD_CONFIGS[view]);
   } catch (e) {
@@ -650,6 +660,514 @@ async function renderEstoque() {
 
   carregarKpis();
   renderAba();
+}
+
+// -------- View genérica: Consumo / Perdas / Avarias --------
+async function renderOperacao(categoria, titulo) {
+  content.innerHTML = `
+    <div class="table-toolbar">
+      <label class="field" style="margin:0; min-width:220px">
+        <span>Filtrar por empresa</span>
+        <select id="opFiltroEmpresa"><option value="">Todas as empresas</option></select>
+      </label>
+      <button class="btn btn-primary" id="opBtnNovo">+ Lançar ${titulo}</button>
+    </div>
+    <div class="kpi-grid" id="opKpis"></div>
+    <div class="tabs">
+      <div class="tab-btn active" data-tab="lancamentos">Lançamentos</div>
+      <div class="tab-btn" data-tab="empresa">Por Empresa</div>
+      ${categoria === 'AVARIA' ? '<div class="tab-btn" data-tab="fornecedor">Por Fornecedor</div>' : ''}
+      <div class="tab-btn" data-tab="produto">Por Produto</div>
+      <div class="tab-btn" data-tab="evolucao">Evolução Mensal</div>
+    </div>
+    <div id="opContent"></div>
+  `;
+
+  const [empresas, produtos, fornecedores] = await Promise.all([optEmpresas(), optProdutos(), optFornecedores()]);
+  const todosTipos = await API.get('/api/tipos-operacao');
+  const tiposDaCategoria = todosTipos.filter(t => t.categoria === categoria);
+
+  const selEmpresa = document.getElementById('opFiltroEmpresa');
+  selEmpresa.innerHTML += empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('');
+  const opContent = document.getElementById('opContent');
+  let abaAtual = 'lancamentos';
+
+  async function carregarKpis() {
+    const empresaId = selEmpresa.value;
+    const r = await API.get(`/api/operacoes/${categoria}/resumo${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    document.getElementById('opKpis').innerHTML = `
+      <div class="kpi-card"><div class="kpi-label">Valor Total (30 dias)</div><div class="kpi-value neg">${UI.fmtMoney(r.valor_total)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Quantidade Total</div><div class="kpi-value">${UI.fmtNum(r.quantidade_total, 2)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Lançamentos</div><div class="kpi-value">${r.lancamentos}</div></div>
+    `;
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    abaAtual = btn.dataset.tab;
+    renderAba();
+  }));
+  selEmpresa.addEventListener('change', () => { carregarKpis(); renderAba(); });
+
+  async function renderAba() {
+    const empresaId = selEmpresa.value;
+    if (abaAtual === 'lancamentos') return renderLancamentos(empresaId);
+    if (abaAtual === 'empresa') return renderPorEmpresa();
+    if (abaAtual === 'fornecedor') return renderPorFornecedor();
+    if (abaAtual === 'produto') return renderPorProduto(empresaId);
+    if (abaAtual === 'evolucao') return renderEvolucao(empresaId);
+  }
+
+  async function renderLancamentos(empresaId) {
+    opContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/operacoes/${categoria}/lancamentos?limit=150${empresaId ? `&empresa_id=${empresaId}` : ''}`);
+    opContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Data</th><th>Produto</th><th>Tipo</th>${categoria === 'AVARIA' ? '<th>Fornecedor</th>' : ''}<th>Motivo</th><th>Documento</th><th>Qtd.</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr>
+            <td>${new Date(d.data).toLocaleString('pt-BR')}</td>
+            <td>${d.produto_codigo} · ${d.produto_descricao}</td>
+            <td>${d.tipo_operacao}</td>
+            ${categoria === 'AVARIA' ? `<td>${d.fornecedor_nome || '—'}</td>` : ''}
+            <td>${d.motivo || '—'}</td><td class="mono">${d.documento_origem || '—'}</td>
+            <td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td>
+          </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-state-title">Nenhum lançamento ainda</div>Use "+ Lançar ${titulo}" para registrar.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderPorEmpresa() {
+    opContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/operacoes/${categoria}/por-empresa`);
+    opContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Empresa</th><th>Quantidade</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td>${d.empresa_nome}</td><td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem dados no período.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderPorFornecedor() {
+    opContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/operacoes/${categoria}/por-fornecedor`);
+    opContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Fornecedor</th><th>Quantidade</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td>${d.fornecedor_nome}</td><td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem dados no período (informe o fornecedor ao lançar a avaria).</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderPorProduto(empresaId) {
+    opContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/operacoes/${categoria}/por-produto${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    opContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Código</th><th>Produto</th><th>Quantidade</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td class="mono">${d.codigo}</td><td>${d.descricao}</td><td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="4"><div class="empty-state">Sem dados no período.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderEvolucao(empresaId) {
+    opContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/operacoes/${categoria}/evolucao-mensal${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    opContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Mês</th><th>Quantidade</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td class="mono">${d.mes}</td><td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem histórico suficiente ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  document.getElementById('opBtnNovo').addEventListener('click', () => {
+    const overlay = UI.openModal({
+      title: `Lançar ${titulo}`,
+      bodyHtml: `
+        <form id="opForm" class="field-row">
+          <label class="field"><span>Empresa *</span><select name="empresa_id" required>${empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('')}</select></label>
+          <label class="field"><span>Tipo de Operação *</span><select name="tipo_operacao_id" required>${tiposDaCategoria.map(t => `<option value="${t.id}">${t.descricao} (CFOP ${t.cfop})</option>`).join('')}</select></label>
+          <label class="field" style="grid-column:span 2"><span>Produto *</span><select name="produto_id" required>${produtos.map(p => `<option value="${p.value}">${p.label}</option>`).join('')}</select></label>
+          <label class="field"><span>Quantidade *</span><input type="number" step="0.001" name="quantidade" required></label>
+          ${categoria === 'AVARIA' ? `<label class="field"><span>Fornecedor</span><select name="fornecedor_id"><option value="">—</option>${fornecedores.map(f => `<option value="${f.value}">${f.label}</option>`).join('')}</select></label>` : ''}
+          <label class="field" style="grid-column:span 2"><span>Motivo</span><input name="motivo" placeholder="Ex: produto vencido, quebra no transporte, uso interno..."></label>
+          <label class="field" style="grid-column:span 2"><span>Documento (opcional)</span><input name="documento_origem"></label>
+        </form>`,
+      footerHtml: `<button class="btn btn-secondary" data-close>Cancelar</button><button class="btn btn-primary" id="opSalvar">Lançar</button>`,
+      onMount: (ov) => ov.querySelector('#opSalvar').addEventListener('click', async () => {
+        const fd = new FormData(ov.querySelector('#opForm'));
+        try {
+          await API.post('/api/operacoes/lancar', {
+            empresa_id: Number(fd.get('empresa_id')), produto_id: Number(fd.get('produto_id')),
+            tipo_operacao_id: Number(fd.get('tipo_operacao_id')), quantidade: Number(fd.get('quantidade')),
+            fornecedor_id: fd.get('fornecedor_id') ? Number(fd.get('fornecedor_id')) : null,
+            motivo: fd.get('motivo') || null, documento_origem: fd.get('documento_origem') || null,
+          });
+          UI.toast(`${titulo} lançado(a) com sucesso.`);
+          UI.closeModal();
+          carregarKpis(); renderAba();
+        } catch (e) { UI.toast(e.message, 'err'); }
+      }),
+    });
+  });
+
+  carregarKpis();
+  renderAba();
+}
+
+// -------- View: Vendas --------
+async function renderVendas() {
+  content.innerHTML = `
+    <div class="kpi-grid" id="vdKpis"></div>
+    <div class="table-toolbar">
+      <label class="field" style="margin:0; min-width:220px">
+        <span>Filtrar por empresa</span>
+        <select id="vdFiltroEmpresa"><option value="">Todas as empresas</option></select>
+      </label>
+      <button class="btn btn-primary" id="vdBtnNovo">+ Nova Venda</button>
+    </div>
+    <div class="tabs">
+      <div class="tab-btn active" data-tab="lista">Vendas</div>
+      <div class="tab-btn" data-tab="produto">Por Produto</div>
+      <div class="tab-btn" data-tab="mensal">Comparativo Mensal</div>
+      <div class="tab-btn" data-tab="anual">Comparativo Anual</div>
+      <div class="tab-btn" data-tab="empresa">Por Empresa</div>
+      <div class="tab-btn" data-tab="devolucoes">Devoluções</div>
+    </div>
+    <div id="vdContent"></div>
+  `;
+
+  const [empresas, clientes, produtos, tiposOperacao] = await Promise.all([optEmpresas(), optClientes(), optProdutos(), optTiposOperacao()]);
+  const tiposVenda = (await API.get('/api/tipos-operacao')).filter(t => t.categoria === 'VENDA');
+  const empresaMap = Object.fromEntries(empresas.map(e => [e.value, e.label]));
+
+  const selEmpresa = document.getElementById('vdFiltroEmpresa');
+  selEmpresa.innerHTML += empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('');
+  const vdContent = document.getElementById('vdContent');
+  let abaAtual = 'lista';
+
+  async function carregarKpis() {
+    const empresaId = selEmpresa.value;
+    const r = await API.get(`/api/vendas/analise/resumo${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    document.getElementById('vdKpis').innerHTML = `
+      <div class="kpi-card"><div class="kpi-label">Vendido no Mês</div><div class="kpi-value pos">${UI.fmtMoney(r.valor_vendido_mes)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Qtd. Vendas no Mês</div><div class="kpi-value">${r.qtd_vendas_mes}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Ticket Médio</div><div class="kpi-value">${UI.fmtMoney(r.ticket_medio_mes)}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total de Devoluções</div><div class="kpi-value ${r.total_devolucoes > 0 ? 'neg' : ''}">${r.total_devolucoes}</div></div>
+    `;
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    abaAtual = btn.dataset.tab;
+    renderAba();
+  }));
+  selEmpresa.addEventListener('change', () => { carregarKpis(); renderAba(); });
+
+  function statusTag(s) {
+    const map = { CONCLUIDA: 'tag-green', CANCELADA: 'tag-gray', DEVOLVIDA_PARCIAL: 'tag-amber', DEVOLVIDA_TOTAL: 'tag-red' };
+    return `<span class="tag ${map[s] || 'tag-gray'}">${s.replace('_', ' ')}</span>`;
+  }
+
+  async function renderAba() {
+    const empresaId = selEmpresa.value;
+    if (abaAtual === 'lista') return renderLista(empresaId);
+    if (abaAtual === 'produto') return renderPorProduto(empresaId);
+    if (abaAtual === 'mensal') return renderMensal(empresaId);
+    if (abaAtual === 'anual') return renderAnual(empresaId);
+    if (abaAtual === 'empresa') return renderPorEmpresa();
+    if (abaAtual === 'devolucoes') return renderDevolucoes(empresaId);
+  }
+
+  async function renderLista(empresaId) {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const vendas = await API.get(`/api/vendas${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Nº Venda</th><th>Empresa</th><th>Data</th><th>Status</th><th>Valor Total</th><th style="width:90px">Ações</th></tr></thead>
+        <tbody>${vendas.length ? vendas.map(v => `
+          <tr>
+            <td class="mono">${v.numero_venda}</td><td>${empresaMap[v.empresa_id] || v.empresa_id}</td>
+            <td>${new Date(v.data_venda).toLocaleDateString('pt-BR')}</td><td>${statusTag(v.status)}</td>
+            <td class="mono">${UI.fmtMoney(v.valor_total)}</td>
+            <td class="row-actions"><button class="icon-btn" data-abrir="${v.id}">Abrir</button></td>
+          </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-state-title">Nenhuma venda registrada</div>Clique em "+ Nova Venda" para começar.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+    vdContent.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => abrirDetalheVenda(Number(b.dataset.abrir))));
+  }
+
+  async function renderPorProduto(empresaId) {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/vendas/analise/por-produto${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>#</th><th>Código</th><th>Produto</th><th>Quantidade Vendida</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map((d, i) => `
+          <tr><td>${i + 1}</td><td class="mono">${d.codigo}</td><td>${d.descricao}</td><td class="mono">${UI.fmtNum(d.quantidade, 2)}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="5"><div class="empty-state">Nenhuma venda no período.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderMensal(empresaId) {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/vendas/analise/comparativo-mensal${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Mês</th><th>Qtd. Vendas</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td class="mono">${d.mes}</td><td class="mono">${d.qtd_vendas}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem histórico suficiente ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderAnual(empresaId) {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/vendas/analise/comparativo-anual${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Ano</th><th>Qtd. Vendas</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td class="mono">${d.ano}</td><td class="mono">${d.qtd_vendas}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem histórico suficiente ainda.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderPorEmpresa() {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get('/api/vendas/analise/por-empresa');
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Empresa</th><th>Qtd. Vendas</th><th>Valor Total</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr><td>${d.empresa_nome}</td><td class="mono">${d.qtd_vendas}</td><td class="mono">${UI.fmtMoney(d.valor_total)}</td></tr>
+        `).join('') : `<tr><td colspan="3"><div class="empty-state">Sem dados no período.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  async function renderDevolucoes(empresaId) {
+    vdContent.innerHTML = `<div style="color:#9096a8">Carregando...</div>`;
+    const dados = await API.get(`/api/vendas/analise/devolucoes${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    vdContent.innerHTML = `
+      <div class="table-wrap"><table class="data-table">
+        <thead><tr><th>Nº Venda</th><th>Status</th><th>Data</th><th>Valor da Venda</th><th>Valor Devolvido</th></tr></thead>
+        <tbody>${dados.length ? dados.map(d => `
+          <tr>
+            <td class="mono">${d.numero_venda}</td><td>${statusTag(d.status)}</td>
+            <td>${new Date(d.data_venda).toLocaleDateString('pt-BR')}</td>
+            <td class="mono">${UI.fmtMoney(d.valor_total_venda)}</td><td class="mono" style="color:var(--red)">${UI.fmtMoney(d.valor_devolvido)}</td>
+          </tr>`).join('') : `<tr><td colspan="5"><div class="empty-state">Nenhuma devolução registrada.</div></td></tr>`}
+        </tbody>
+      </table></div>`;
+  }
+
+  // ---- Nova Venda (modal master-detail) ----
+  document.getElementById('vdBtnNovo').addEventListener('click', () => {
+    let itens = [];
+
+    function itensTableHtml() {
+      if (!itens.length) return `<div class="empty-state" style="padding:16px">Nenhum item adicionado.</div>`;
+      return `<table class="data-table"><thead><tr><th>Produto</th><th>Qtd</th><th>Vlr Unit.</th><th>Total</th><th></th></tr></thead><tbody>
+        ${itens.map((it, idx) => {
+          const prod = produtos.find(p => p.value === it.produto_id);
+          return `<tr>
+            <td>${prod ? prod.label : it.produto_id}</td><td class="mono">${UI.fmtNum(it.quantidade, 3)}</td>
+            <td class="mono">${UI.fmtMoney(it.valor_unitario)}</td><td class="mono">${UI.fmtMoney(it.valor_total)}</td>
+            <td><button type="button" class="icon-btn" data-rm-item="${idx}">🗑</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>`;
+    }
+
+    const overlay = UI.openModal({
+      title: 'Nova Venda',
+      bodyHtml: `
+        <form id="vdForm" class="field-row">
+          <label class="field"><span>Número da Venda *</span><input name="numero_venda" required value="VD-${Date.now().toString().slice(-6)}"></label>
+          <label class="field"><span>Empresa *</span><select name="empresa_id" required>${empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('')}</select></label>
+          <label class="field"><span>Cliente</span><select name="cliente_id"><option value="">Consumidor não identificado</option>${clientes.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}</select></label>
+          <label class="field"><span>Tipo de Operação</span><select name="tipo_operacao_id">${tiposVenda.map(t => `<option value="${t.id}">${t.descricao} (CFOP ${t.cfop})</option>`).join('')}</select></label>
+          <label class="field"><span>Desconto (R$)</span><input type="number" step="0.01" name="valor_desconto" value="0"></label>
+          <label class="field" style="flex-direction:row; align-items:center; gap:8px"><input type="checkbox" name="gerar_financeiro"> <span>Gerar conta a receber</span></label>
+        </form>
+        <div class="panel" style="margin-top:4px">
+          <div class="panel-header"><div class="panel-title">Itens da Venda</div></div>
+          <div class="panel-body">
+            <div id="vdItensTableWrap">${itensTableHtml()}</div>
+            <div class="field-row" style="margin-top:14px; align-items:flex-end">
+              <label class="field"><span>Produto</span><select id="vdItemProduto">${produtos.map(p => `<option value="${p.value}">${p.label}</option>`).join('')}</select></label>
+              <label class="field"><span>Quantidade</span><input type="number" step="0.001" id="vdItemQtd" value="1"></label>
+              <label class="field"><span>Vlr. Unitário</span><input type="number" step="0.0001" id="vdItemValor" value="0"></label>
+              <button type="button" class="btn btn-secondary" id="vdBtnAddItem">+ Adicionar Item</button>
+            </div>
+          </div>
+        </div>`,
+      footerHtml: `<button class="btn btn-secondary" data-close>Cancelar</button><button class="btn btn-primary" id="vdSalvar">Confirmar Venda</button>`,
+      onMount: (ov) => {
+        function religarRemover() {
+          ov.querySelectorAll('[data-rm-item]').forEach(btn => btn.addEventListener('click', () => {
+            itens.splice(Number(btn.dataset.rmItem), 1);
+            ov.querySelector('#vdItensTableWrap').innerHTML = itensTableHtml();
+            religarRemover();
+          }));
+        }
+        religarRemover();
+
+        ov.querySelector('#vdBtnAddItem').addEventListener('click', () => {
+          const produtoId = Number(ov.querySelector('#vdItemProduto').value);
+          const qtd = Number(ov.querySelector('#vdItemQtd').value) || 0;
+          const valor = Number(ov.querySelector('#vdItemValor').value) || 0;
+          if (!produtoId || qtd <= 0) { UI.toast('Informe produto e quantidade válidos.', 'err'); return; }
+          itens.push({ produto_id: produtoId, quantidade: qtd, valor_unitario: valor, valor_total: qtd * valor });
+          ov.querySelector('#vdItensTableWrap').innerHTML = itensTableHtml();
+          religarRemover();
+        });
+
+        ov.querySelector('#vdSalvar').addEventListener('click', async () => {
+          if (!itens.length) { UI.toast('Adicione ao menos um item à venda.', 'err'); return; }
+          const fd = new FormData(ov.querySelector('#vdForm'));
+          try {
+            await API.post('/api/vendas', {
+              numero_venda: fd.get('numero_venda'), empresa_id: Number(fd.get('empresa_id')),
+              cliente_id: fd.get('cliente_id') ? Number(fd.get('cliente_id')) : null,
+              tipo_operacao_id: fd.get('tipo_operacao_id') ? Number(fd.get('tipo_operacao_id')) : null,
+              valor_desconto: Number(fd.get('valor_desconto')) || 0,
+              gerar_financeiro: fd.get('gerar_financeiro') === 'on',
+              itens: itens.map(it => ({ produto_id: it.produto_id, quantidade: it.quantidade, valor_unitario: it.valor_unitario, valor_total: it.quantidade * it.valor_unitario })),
+            });
+            UI.toast('Venda registrada com sucesso.');
+            UI.closeModal();
+            carregarKpis(); renderAba();
+          } catch (e) { UI.toast(e.message, 'err'); }
+        });
+      },
+    });
+  });
+
+  // ---- Detalhe da venda (cancelar / devolver) ----
+  async function abrirDetalheVenda(id) {
+    const venda = await API.get(`/api/vendas/${id}`);
+    const devolucoes = {};
+
+    function linhasHtml() {
+      return venda.itens.map(item => {
+        const prod = produtos.find(p => p.value === item.produto_id);
+        const disponivel = Number(item.quantidade) - Number(item.quantidade_devolvida || 0);
+        return `<tr>
+          <td>${prod ? prod.label : item.produto_id}</td>
+          <td class="mono">${UI.fmtNum(item.quantidade, 2)}</td>
+          <td class="mono">${UI.fmtNum(item.quantidade_devolvida || 0, 2)}</td>
+          <td class="mono">${UI.fmtMoney(item.valor_unitario)}</td>
+          <td>${disponivel > 0 && venda.status !== 'CANCELADA' ? `<input type="number" step="0.001" min="0" max="${disponivel}" class="dev-input" data-item="${item.id}" style="width:90px" placeholder="0">` : '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    UI.openModal({
+      title: `Venda ${venda.numero_venda}`,
+      bodyHtml: `
+        <div style="margin-bottom:12px">${statusTag(venda.status)} <span class="tag tag-gray">${UI.fmtMoney(venda.valor_total)}</span></div>
+        <div class="table-wrap"><table class="data-table">
+          <thead><tr><th>Produto</th><th>Qtd. Vendida</th><th>Qtd. Devolvida</th><th>Vlr. Unit.</th><th>Devolver Agora</th></tr></thead>
+          <tbody id="vdDetItens">${linhasHtml()}</tbody>
+        </table></div>`,
+      footerHtml: `
+        <button class="btn btn-secondary" data-close>Fechar</button>
+        ${venda.status !== 'CANCELADA' ? '<button class="btn btn-danger" id="btnCancelarVenda">Cancelar Venda</button><button class="btn btn-primary" id="btnConfirmarDevolucao">Registrar Devolução</button>' : ''}
+      `,
+      onMount: (ov) => {
+        if (ov.querySelector('#btnCancelarVenda')) {
+          ov.querySelector('#btnCancelarVenda').addEventListener('click', async () => {
+            if (!confirm('Cancelar a venda inteira e estornar o estoque?')) return;
+            await API.post(`/api/vendas/${venda.id}/cancelar`);
+            UI.toast('Venda cancelada e estoque estornado.');
+            UI.closeModal(); renderAba();
+          });
+        }
+        if (ov.querySelector('#btnConfirmarDevolucao')) {
+          ov.querySelector('#btnConfirmarDevolucao').addEventListener('click', async () => {
+            const itensDevolucao = Array.from(ov.querySelectorAll('.dev-input'))
+              .map(inp => ({ item_id: Number(inp.dataset.item), quantidade: Number(inp.value) || 0 }))
+              .filter(i => i.quantidade > 0);
+            if (!itensDevolucao.length) { UI.toast('Informe a quantidade a devolver em ao menos um item.', 'err'); return; }
+            try {
+              await API.post(`/api/vendas/${venda.id}/devolver`, { itens: itensDevolucao });
+              UI.toast('Devolução registrada.');
+              UI.closeModal(); carregarKpis(); renderAba();
+            } catch (e) { UI.toast(e.message, 'err'); }
+          });
+        }
+      },
+    });
+  }
+
+  carregarKpis();
+  renderAba();
+}
+
+// -------- View: Relatórios Avançados --------
+async function renderRelatorios() {
+  content.innerHTML = `
+    <div class="table-toolbar">
+      <label class="field" style="margin:0; min-width:220px">
+        <span>Filtrar por empresa</span>
+        <select id="relFiltroEmpresa"><option value="">Todas as empresas</option></select>
+      </label>
+    </div>
+    <div id="relKpis" style="color:#9096a8">Carregando relatório consolidado...</div>
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-header"><div class="panel-title">Ir para análises detalhadas</div></div>
+      <div class="panel-body" style="display:flex; flex-wrap:wrap; gap:10px">
+        <button class="btn btn-secondary" data-ir="estoque">Estoque (Curva ABC, Giro, Ruptura)</button>
+        <button class="btn btn-secondary" data-ir="vendas">Vendas (Produto, Mensal, Anual)</button>
+        <button class="btn btn-secondary" data-ir="perdas">Perdas</button>
+        <button class="btn btn-secondary" data-ir="avarias">Avarias</button>
+        <button class="btn btn-secondary" data-ir="consumo">Consumo</button>
+        <button class="btn btn-secondary" data-ir="financeiro">Financeiro</button>
+        <button class="btn btn-secondary" data-ir="inventario">Inventário</button>
+      </div>
+    </div>
+  `;
+  content.querySelectorAll('[data-ir]').forEach(b => b.addEventListener('click', () => navigate(b.dataset.ir)));
+
+  const empresas = await optEmpresas();
+  const selEmpresa = document.getElementById('relFiltroEmpresa');
+  selEmpresa.innerHTML += empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('');
+
+  async function carregar() {
+    const empresaId = selEmpresa.value;
+    const r = await API.get(`/api/relatorios/consolidado${empresaId ? `?empresa_id=${empresaId}` : ''}`);
+    document.getElementById('relKpis').innerHTML = `
+      <p style="color:var(--ink-soft); font-size:12.5px">Período de referência: <strong>${r.periodo_referencia}</strong></p>
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Vendas do Mês</div><div class="kpi-value pos">${UI.fmtMoney(r.vendas.valor_mes)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Compras do Mês</div><div class="kpi-value">${UI.fmtMoney(r.compras.valor_mes)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Margem Bruta Estimada</div><div class="kpi-value ${r.margem_bruta_estimada_mes >= 0 ? 'pos' : 'neg'}">${UI.fmtMoney(r.margem_bruta_estimada_mes)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Valor em Estoque</div><div class="kpi-value">${UI.fmtMoney(r.estoque.valor_atual)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Perdas (30 dias)</div><div class="kpi-value neg">${UI.fmtMoney(r.perdas.valor_30_dias)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avarias (30 dias)</div><div class="kpi-value neg">${UI.fmtMoney(r.avarias.valor_30_dias)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">Consumo Interno (30 dias)</div><div class="kpi-value">${UI.fmtMoney(r.consumo.valor_30_dias)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">A Pagar em Aberto</div><div class="kpi-value neg">${UI.fmtMoney(r.financeiro.a_pagar_aberto)}</div></div>
+        <div class="kpi-card"><div class="kpi-label">A Receber em Aberto</div><div class="kpi-value pos">${UI.fmtMoney(r.financeiro.a_receber_aberto)}</div></div>
+      </div>
+    `;
+  }
+
+  selEmpresa.addEventListener('change', carregar);
+  carregar();
 }
 
 // -------- View: Inventário --------
