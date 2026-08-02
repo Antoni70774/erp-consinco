@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import models, schemas
 from .database import engine, garantir_schema
-from .routers import auth, compras, estoque, financeiro, gerencial
+from .routers import auth, compras, estoque, financeiro, gerencial, inventario
 from .routers.crud_factory import build_crud_router
 
 app = FastAPI(
@@ -38,6 +38,7 @@ app.include_router(gerencial.router)
 app.include_router(compras.router)
 app.include_router(financeiro.router)
 app.include_router(estoque.router)
+app.include_router(inventario.router)
 
 # ---- Cadastros (CRUD genérico) ----
 app.include_router(build_crud_router(
