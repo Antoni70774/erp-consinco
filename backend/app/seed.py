@@ -8,10 +8,11 @@ Popula o banco com dados mínimos para o sistema funcionar no primeiro acesso:
 
 Executar com:  python -m app.seed
 """
-from .database import SessionLocal, engine
+from .database import SessionLocal, engine, garantir_schema
 from . import models
 from .security import hash_senha
 
+garantir_schema()
 models.Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 
