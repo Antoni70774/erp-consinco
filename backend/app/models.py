@@ -360,7 +360,9 @@ class EstoqueMovimento(Base):
     empresa_id = Column(Integer, ForeignKey("erp.empresas.id"), nullable=False)
     produto_id = Column(Integer, ForeignKey("erp.produtos.id"), nullable=False)
     tipo_operacao_id = Column(Integer, ForeignKey("erp.tipos_operacao.id"), nullable=False)
+    fornecedor_id = Column(Integer, ForeignKey("erp.fornecedores.id"))  # usado em avarias/compras
     documento_origem = Column(String(30))
+    motivo = Column(String(200))  # usado em consumo/perda/avaria
     quantidade = Column(Numeric(14, 3), nullable=False)
     valor_unitario = Column(Numeric(14, 4), default=0, nullable=False)
     saldo_apos = Column(Numeric(14, 3))
@@ -413,4 +415,49 @@ class InventarioItem(Base):
     ajuste_aplicado = Column(Boolean, default=False)                         # true após o fechamento gerar o ajuste
 
     inventario = relationship("Inventario", back_populates="itens")
+    produto = relationship("Produto")
+
+
+# ---------------------------------------------------------------------
+# VENDAS — cabeçalho + itens, com suporte a devolução parcial/total
+# ---------------------------------------------------------------------
+class Venda(Base):
+    __tablename__ = "vendas"
+    __table_args__ = {"schema": "erp"}
+
+    id = Column(Integer, primary_key=True)
+    numero_venda = Column(String(20), unique=True, nullable=False)
+    empresa_id = Column(Integer, ForeignKey("erp.empresas.id"), nullable=False)
+    cliente_id = Column(Integer, ForeignKey("erp.clientes.id"))
+    tipo_operacao_id = Column(Integer, ForeignKey("erp.tipos_operacao.id"))
+    usuario_id = Column(Integer, ForeignKey("erp.usuarios.id"))
+    data_venda = Column(DateTime, server_default=func.now())
+    status = Column(String(20), nullable=False, default="CONCLUIDA")  # CONCLUIDA, CANCELADA, DEVOLVIDA_PARCIAL, DEVOLVIDA_TOTAL
+    valor_produtos = Column(Numeric(14, 2), default=0)
+    valor_desconto = Column(Numeric(14, 2), default=0)
+    valor_total = Column(Numeric(14, 2), default=0)
+    observacao = Column(Text)
+    criado_em = Column(DateTime, server_default=func.now())
+
+    empresa = relationship("Empresa")
+    cliente = relationship("Cliente")
+    tipo_operacao = relationship("TipoOperacao")
+    itens = relationship("VendaItem", back_populates="venda", cascade="all, delete-orphan")
+
+
+class VendaItem(Base):
+    __tablename__ = "vendas_itens"
+    __table_args__ = {"schema": "erp"}
+
+    id = Column(Integer, primary_key=True)
+    venda_id = Column(Integer, ForeignKey("erp.vendas.id", ondelete="CASCADE"), nullable=False)
+    produto_id = Column(Integer, ForeignKey("erp.produtos.id"), nullable=False)
+    quantidade = Column(Numeric(14, 3), nullable=False)
+    quantidade_devolvida = Column(Numeric(14, 3), default=0)
+    valor_unitario = Column(Numeric(14, 4), nullable=False)
+    valor_desconto = Column(Numeric(14, 2), default=0)
+    valor_total = Column(Numeric(14, 2), nullable=False)
+    cfop = Column(String(6))
+
+    venda = relationship("Venda", back_populates="itens")
     produto = relationship("Produto")
