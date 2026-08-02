@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from .. import models, schemas, security
 from ..database import get_db
+from ..inventario_lock import verificar_produto_congelado
 
 router = APIRouter(prefix="/api/compras", tags=["Compras"], dependencies=[Depends(security.usuario_atual)])
 
@@ -82,6 +83,7 @@ def receber_mercadoria(compra_id: int, db: Session = Depends(get_db)):
         raise HTTPException(400, "Pedido já recebido")
 
     for item in compra.itens:
+        verificar_produto_congelado(db, compra.empresa_id, item.produto_id)
         item.quantidade_recebida = item.quantidade_pedida
 
         saldo = (
