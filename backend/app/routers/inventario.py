@@ -153,9 +153,9 @@ def listar_criticas(inventario_id: int, db: Session = Depends(get_db)):
 def fechar(inventario_id: int, ignorar_criticas: bool = False,
            usuario: models.Usuario = Depends(security.usuario_atual), db: Session = Depends(get_db)):
     """
-    Fecha o inventário: para cada item com diferença, gera um movimento de
-    ajuste (sobra ou falta) usando os tipos de operação INV-A / INV-F,
-    atualiza o saldo consolidado e o campo estoque_atual do produto.
+    Fecha o inventário: aplica ajustes de sobra/falta automaticamente,
+    mesmo com divergências. Se houver críticas, marca o inventário como
+    fechado com divergências (campo opcional).
     """
     inv = db.query(models.Inventario).options(joinedload(models.Inventario.itens)).get(inventario_id)
     if not inv:
@@ -167,13 +167,15 @@ def fechar(inventario_id: int, ignorar_criticas: bool = False,
     if pendentes:
         raise HTTPException(400, f"Existem {len(pendentes)} item(ns) sem contagem registrada.")
 
+    # Verifica críticas, mas não bloqueia o fechamento.
     criticas_abertas = [i for i in inv.itens if i.critica]
-    if criticas_abertas and not ignorar_criticas:
-        raise HTTPException(
-            409,
-            f"Existem {len(criticas_abertas)} item(ns) com crítica de divergência. "
-            f"Revise-os ou feche com ignorar_criticas=true para prosseguir mesmo assim.",
-        )
+    if criticas_abertas:
+        # Marca o inventário como fechado com divergências se o modelo tiver o campo.
+        try:
+            setattr(inv, "fechado_com_divergencias", True)
+        except Exception:
+            # se o atributo não existir, ignora silenciosamente
+            pass
 
     tipo_sobra = db.query(models.TipoOperacao).filter_by(codigo="INV-A").first()
     tipo_falta = db.query(models.TipoOperacao).filter_by(codigo="INV-F").first()
@@ -188,17 +190,27 @@ def fechar(inventario_id: int, ignorar_criticas: bool = False,
                 .first()
             )
             if not saldo:
-                saldo = models.EstoqueSaldo(empresa_id=inv.empresa_id, produto_id=item.produto_id, quantidade=0, valor_medio=item.valor_unitario or 0)
+                saldo = models.EstoqueSaldo(
+                    empresa_id=inv.empresa_id,
+                    produto_id=item.produto_id,
+                    quantidade=0,
+                    valor_medio=item.valor_unitario or 0
+                )
                 db.add(saldo)
                 db.flush()
 
-            tipo = tipo_sobra if item.diferenca > 0 else tipo_falta
-            saldo.quantidade = float(item.quantidade_contada)  # contagem física passa a ser a verdade
+            tipo = tipo_sobra if float(item.diferenca) > 0 else tipo_falta
+            # A contagem física passa a ser a verdade
+            saldo.quantidade = float(item.quantidade_contada)
 
             db.add(models.EstoqueMovimento(
-                empresa_id=inv.empresa_id, produto_id=item.produto_id, tipo_operacao_id=tipo.id,
-                documento_origem=f"INV-{inv.id}", quantidade=abs(float(item.diferenca)),
-                valor_unitario=item.valor_unitario or 0, saldo_apos=saldo.quantidade,
+                empresa_id=inv.empresa_id,
+                produto_id=item.produto_id,
+                tipo_operacao_id=tipo.id,
+                documento_origem=f"INV-{inv.id}",
+                quantidade=abs(float(item.diferenca)),
+                valor_unitario=item.valor_unitario or 0,
+                saldo_apos=saldo.quantidade,
                 usuario_id=usuario.id,
             ))
             item.ajuste_aplicado = True
