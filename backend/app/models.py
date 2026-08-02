@@ -366,3 +366,51 @@ class EstoqueMovimento(Base):
     saldo_apos = Column(Numeric(14, 3))
     usuario_id = Column(Integer, ForeignKey("erp.usuarios.id"))
     criado_em = Column(DateTime, server_default=func.now())
+
+
+# ---------------------------------------------------------------------
+# INVENTÁRIO — abertura (produto/seção/geral), congelamento, críticas,
+# fechamento com geração automática de ajustes de estoque.
+# ---------------------------------------------------------------------
+class Inventario(Base):
+    __tablename__ = "inventarios"
+    __table_args__ = {"schema": "erp"}
+
+    id = Column(Integer, primary_key=True)
+    empresa_id = Column(Integer, ForeignKey("erp.empresas.id"), nullable=False)
+    descricao = Column(String(150), nullable=False)
+    tipo_abertura = Column(String(20), nullable=False, default="GERAL")  # PRODUTO, SECAO, GERAL
+    categoria_id = Column(Integer, ForeignKey("erp.categorias_produto.id"))  # usado quando tipo_abertura = SECAO
+    status = Column(String(20), nullable=False, default="ABERTO")  # ABERTO, CONGELADO, FECHADO, CANCELADO
+    tolerancia_critica_pct = Column(Numeric(5, 2), default=5)  # % de divergência tolerada antes de virar crítica
+    usuario_abertura_id = Column(Integer, ForeignKey("erp.usuarios.id"))
+    usuario_fechamento_id = Column(Integer, ForeignKey("erp.usuarios.id"))
+    data_abertura = Column(DateTime, server_default=func.now())
+    data_congelamento = Column(DateTime)
+    data_fechamento = Column(DateTime)
+    observacao = Column(Text)
+
+    empresa = relationship("Empresa")
+    categoria = relationship("CategoriaProduto")
+    itens = relationship("InventarioItem", back_populates="inventario", cascade="all, delete-orphan")
+
+
+class InventarioItem(Base):
+    __tablename__ = "inventario_itens"
+    __table_args__ = {"schema": "erp"}
+
+    id = Column(Integer, primary_key=True)
+    inventario_id = Column(Integer, ForeignKey("erp.inventarios.id", ondelete="CASCADE"), nullable=False)
+    produto_id = Column(Integer, ForeignKey("erp.produtos.id"), nullable=False)
+    quantidade_sistema = Column(Numeric(14, 3), nullable=False, default=0)   # saldo no momento da abertura
+    quantidade_contada = Column(Numeric(14, 3))                              # preenchido na contagem
+    valor_unitario = Column(Numeric(14, 4), default=0)
+    diferenca = Column(Numeric(14, 3))                                       # contada - sistema
+    valor_diferenca = Column(Numeric(14, 2))
+    critica = Column(Boolean, default=False)                                 # divergência acima da tolerância
+    critica_motivo = Column(String(200))
+    contado_em = Column(DateTime)
+    ajuste_aplicado = Column(Boolean, default=False)                         # true após o fechamento gerar o ajuste
+
+    inventario = relationship("Inventario", back_populates="itens")
+    produto = relationship("Produto")
