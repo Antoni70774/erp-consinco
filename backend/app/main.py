@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import models, schemas
-from .database import engine
+from .database import engine, garantir_schema
 from .routers import auth, compras, financeiro, gerencial
 from .routers.crud_factory import build_crud_router
 
@@ -30,6 +30,7 @@ app.add_middleware(
 
 # Cria as tabelas automaticamente se ainda não existirem
 # (em produção, prefira usar sql/schema.sql + Alembic para migrações controladas)
+garantir_schema()
 models.Base.metadata.create_all(bind=engine)
 
 app.include_router(auth.router)
