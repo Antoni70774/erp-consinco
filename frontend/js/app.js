@@ -259,6 +259,7 @@ const VIEW_TITLES = {
   produtos: ['Produtos', 'Cadastros · Cadastro Completo com Dados Fiscais'],
   compras: ['Compras', 'Operacional'],
   estoque: ['Estoque', 'Análises · Saldo, Curva ABC, Giro/Cobertura, Ruptura, Kardex'],
+  inventario: ['Inventário', 'Abertura, Congelamento, Críticas e Fechamento'],
   financeiro: ['Financeiro', 'Operacional · Contas a Pagar e a Receber'],
   'tipos-operacao': ['Tipos de Operação (CFOP)', 'Configurações'],
   usuarios: ['Usuários e Senhas', 'Configurações'],
@@ -275,6 +276,7 @@ async function navigate(view) {
     if (view === 'dashboard') return renderDashboard();
     if (view === 'compras') return renderCompras();
     if (view === 'estoque') return renderEstoque();
+    if (view === 'inventario') return renderInventario();
     if (view === 'financeiro') return renderFinanceiro();
     if (CRUD_CONFIGS[view]) return UI.renderCrudView(content, CRUD_CONFIGS[view]);
   } catch (e) {
@@ -648,6 +650,201 @@ async function renderEstoque() {
 
   carregarKpis();
   renderAba();
+}
+
+// -------- View: Inventário --------
+async function renderInventario() {
+  content.innerHTML = `
+    <div class="table-toolbar">
+      <input class="search-input" id="invFiltroStatus" placeholder="Filtrar por status (ABERTO, CONGELADO, FECHADO...)">
+      <button class="btn btn-primary" id="btnNovoInventario">+ Abrir Inventário</button>
+    </div>
+    <div class="table-wrap"><table class="data-table">
+      <thead><tr><th>#</th><th>Descrição</th><th>Tipo</th><th>Empresa</th><th>Status</th><th>Abertura</th><th style="width:110px">Ações</th></tr></thead>
+      <tbody id="invTbody"><tr><td colspan="7" style="padding:20px;color:#9096a8">Carregando...</td></tr></tbody>
+    </table></div>
+  `;
+
+  const [empresas, categorias, produtos] = await Promise.all([optEmpresas(), optCategorias(), optProdutos()]);
+  const empresaMap = Object.fromEntries(empresas.map(e => [e.value, e.label]));
+
+  function statusTag(s) {
+    const map = { ABERTO: 'tag-amber', CONGELADO: 'tag-red', FECHADO: 'tag-green', CANCELADO: 'tag-gray' };
+    return `<span class="tag ${map[s] || 'tag-gray'}">${s}</span>`;
+  }
+
+  async function load() {
+    const status = document.getElementById('invFiltroStatus').value.trim();
+    const lista = await API.get(`/api/inventario${status ? `?status=${encodeURIComponent(status)}` : ''}`);
+    const tbody = document.getElementById('invTbody');
+    if (!lista.length) {
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><div class="empty-state-title">Nenhum inventário aberto</div>Clique em "Abrir Inventário" para começar uma contagem.</div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = lista.map(inv => `
+      <tr>
+        <td class="mono">#${inv.id}</td><td>${inv.descricao}</td><td>${inv.tipo_abertura}</td>
+        <td>${empresaMap[inv.empresa_id] || inv.empresa_id}</td><td>${statusTag(inv.status)}</td>
+        <td>${UI.fmtDate(inv.data_abertura ? inv.data_abertura.slice(0, 10) : null)}</td>
+        <td class="row-actions"><button class="icon-btn" data-abrir="${inv.id}">Abrir</button></td>
+      </tr>`).join('');
+    tbody.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => abrirDetalhe(Number(b.dataset.abrir))));
+  }
+
+  document.getElementById('btnNovoInventario').addEventListener('click', () => {
+    let tipoAtual = 'GERAL';
+    const overlay = UI.openModal({
+      title: 'Abrir Novo Inventário',
+      bodyHtml: `
+        <form id="invForm" class="field-row">
+          <label class="field" style="grid-column:span 2"><span>Descrição *</span><input name="descricao" required placeholder="Ex: Inventário Geral - Agosto/2026"></label>
+          <label class="field"><span>Empresa *</span><select name="empresa_id" required>${empresas.map(e => `<option value="${e.value}">${e.label}</option>`).join('')}</select></label>
+          <label class="field"><span>Tipo de Abertura *</span>
+            <select name="tipo_abertura" id="invTipoAbertura">
+              <option value="GERAL">Geral (todos os produtos)</option>
+              <option value="SECAO">Por Seção (categoria)</option>
+              <option value="PRODUTO">Por Produto (seleção manual)</option>
+            </select>
+          </label>
+          <label class="field" id="campoCategoria" style="display:none"><span>Seção / Categoria</span>
+            <select name="categoria_id">${categorias.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}</select>
+          </label>
+          <label class="field"><span>Tolerância de Crítica (%)</span><input type="number" name="tolerancia_critica_pct" value="5" step="0.1"></label>
+          <label class="field" id="campoProdutos" style="display:none; grid-column:span 2"><span>Produtos (Ctrl/Cmd+clique para selecionar vários)</span>
+            <select name="produto_ids" multiple size="6">${produtos.map(p => `<option value="${p.value}">${p.label}</option>`).join('')}</select>
+          </label>
+        </form>`,
+      footerHtml: `<button class="btn btn-secondary" data-close>Cancelar</button><button class="btn btn-primary" id="invSalvar">Abrir Inventário</button>`,
+      onMount: (ov) => {
+        const selTipo = ov.querySelector('#invTipoAbertura');
+        selTipo.addEventListener('change', () => {
+          ov.querySelector('#campoCategoria').style.display = selTipo.value === 'SECAO' ? '' : 'none';
+          ov.querySelector('#campoProdutos').style.display = selTipo.value === 'PRODUTO' ? '' : 'none';
+        });
+        ov.querySelector('#invSalvar').addEventListener('click', async () => {
+          const form = ov.querySelector('#invForm');
+          const fd = new FormData(form);
+          const produtoIds = Array.from(form.querySelector('[name="produto_ids"]').selectedOptions).map(o => Number(o.value));
+          try {
+            await API.post('/api/inventario', {
+              empresa_id: Number(fd.get('empresa_id')),
+              descricao: fd.get('descricao'),
+              tipo_abertura: fd.get('tipo_abertura'),
+              categoria_id: fd.get('categoria_id') ? Number(fd.get('categoria_id')) : null,
+              produto_ids: produtoIds.length ? produtoIds : null,
+              tolerancia_critica_pct: Number(fd.get('tolerancia_critica_pct')) || 5,
+            });
+            UI.toast('Inventário aberto com sucesso.');
+            UI.closeModal();
+            load();
+          } catch (e) { UI.toast(e.message, 'err'); }
+        });
+      },
+    });
+  });
+
+  async function abrirDetalhe(id) {
+    const inv = await API.get(`/api/inventario/${id}`);
+
+    function linhasHtml() {
+      return inv.itens.map(item => {
+        const prod = produtos.find(p => p.value === item.produto_id);
+        const editavel = inv.status !== 'FECHADO';
+        return `<tr class="${item.critica ? 'critica-row' : ''}">
+          <td>${prod ? prod.label : item.produto_id}</td>
+          <td class="mono">${UI.fmtNum(item.quantidade_sistema, 2)}</td>
+          <td>${editavel
+            ? `<input type="number" step="0.001" data-item="${item.id}" class="contagem-input" style="width:100px" value="${item.quantidade_contada ?? ''}">`
+            : `<span class="mono">${item.quantidade_contada !== null ? UI.fmtNum(item.quantidade_contada, 2) : '—'}</span>`}
+          </td>
+          <td class="mono">${item.diferenca !== null && item.diferenca !== undefined ? UI.fmtNum(item.diferenca, 2) : '—'}</td>
+          <td>${item.critica ? `<span class="tag tag-red" title="${item.critica_motivo || ''}">Crítica</span>` : (item.quantidade_contada !== null ? '<span class="tag tag-green">OK</span>' : '<span class="tag tag-gray">Pendente</span>')}</td>
+          <td>${editavel ? `<button class="icon-btn" data-salvar-item="${item.id}">Salvar</button>` : ''}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    const totalItens = inv.itens.length;
+    const contados = inv.itens.filter(i => i.quantidade_contada !== null && i.quantidade_contada !== undefined).length;
+    const criticas = inv.itens.filter(i => i.critica).length;
+
+    const overlay = UI.openModal({
+      title: `Inventário #${inv.id} — ${inv.descricao}`,
+      bodyHtml: `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px">
+          <span class="tag ${inv.status === 'FECHADO' ? 'tag-green' : inv.status === 'CONGELADO' ? 'tag-red' : 'tag-amber'}">${inv.status}</span>
+          <span class="tag tag-gray">${contados}/${totalItens} contados</span>
+          ${criticas > 0 ? `<span class="tag tag-red">${criticas} crítica(s)</span>` : ''}
+        </div>
+        <div class="table-wrap" style="max-height:400px">
+          <table class="data-table">
+            <thead><tr><th>Produto</th><th>Qtd. Sistema</th><th>Qtd. Contada</th><th>Diferença</th><th>Status</th><th></th></tr></thead>
+            <tbody id="invItensBody">${linhasHtml()}</tbody>
+          </table>
+        </div>
+      `,
+      footerHtml: `
+        <button class="btn btn-secondary" data-close>Fechar Janela</button>
+        ${inv.status === 'ABERTO' ? '<button class="btn btn-secondary" id="btnCongelar">Congelar Estoque</button>' : ''}
+        ${inv.status === 'CONGELADO' ? '<button class="btn btn-secondary" id="btnDescongelar">Descongelar</button>' : ''}
+        ${inv.status !== 'FECHADO' ? '<button class="btn btn-primary" id="btnFecharInv">Fechar Inventário</button>' : ''}
+      `,
+      onMount: (ov) => {
+        function ligarSalvarItens() {
+          ov.querySelectorAll('[data-salvar-item]').forEach(btn => btn.addEventListener('click', async () => {
+            const itemId = Number(btn.dataset.salvarItem);
+            const input = ov.querySelector(`.contagem-input[data-item="${itemId}"]`);
+            const valor = Number(input.value);
+            if (input.value === '' || isNaN(valor)) { UI.toast('Informe a quantidade contada.', 'err'); return; }
+            try {
+              const atualizado = await API.put(`/api/inventario/${inv.id}/itens/${itemId}/contagem`, { quantidade_contada: valor });
+              const idx = inv.itens.findIndex(i => i.id === itemId);
+              inv.itens[idx] = { ...inv.itens[idx], ...atualizado };
+              ov.querySelector('#invItensBody').innerHTML = linhasHtml();
+              ligarSalvarItens();
+              UI.toast('Contagem registrada.');
+            } catch (e) { UI.toast(e.message, 'err'); }
+          }));
+        }
+        ligarSalvarItens();
+
+        if (ov.querySelector('#btnCongelar')) {
+          ov.querySelector('#btnCongelar').addEventListener('click', async () => {
+            await API.post(`/api/inventario/${inv.id}/congelar`);
+            UI.toast('Estoque congelado para este inventário.');
+            UI.closeModal(); load(); abrirDetalhe(inv.id);
+          });
+        }
+        if (ov.querySelector('#btnDescongelar')) {
+          ov.querySelector('#btnDescongelar').addEventListener('click', async () => {
+            await API.post(`/api/inventario/${inv.id}/descongelar`);
+            UI.toast('Inventário descongelado.');
+            UI.closeModal(); load(); abrirDetalhe(inv.id);
+          });
+        }
+        if (ov.querySelector('#btnFecharInv')) {
+          ov.querySelector('#btnFecharInv').addEventListener('click', async () => {
+            if (!confirm('Fechar o inventário vai gerar ajustes de estoque automaticamente para todas as diferenças. Confirma?')) return;
+            try {
+              await API.post(`/api/inventario/${inv.id}/fechar`);
+              UI.toast('Inventário fechado. Ajustes de estoque aplicados.');
+              UI.closeModal(); load();
+            } catch (e) {
+              if (confirm(`${e.message}\n\nDeseja fechar mesmo assim, ignorando as críticas?`)) {
+                await API.post(`/api/inventario/${inv.id}/fechar?ignorar_criticas=true`);
+                UI.toast('Inventário fechado (críticas ignoradas).');
+                UI.closeModal(); load();
+              }
+            }
+          });
+        }
+      },
+    });
+  }
+
+  let t;
+  document.getElementById('invFiltroStatus').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); });
+  load();
 }
 
 // -------- View: Financeiro (contas a pagar / receber) --------
