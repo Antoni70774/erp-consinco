@@ -9,6 +9,6 @@
 // para o backend/banco daquele cliente na nuvem.
 // ==========================================================================
 window.ERP_CONFIG = {
-  API_BASE: "http://localhost:8000",
-  CLIENTE_NOME: "Ambiente de Desenvolvimento",
+  API_BASE: "https://erp-consinco-backend.onrender.com",
+  CLIENTE_NOME: "Minha Empresa",
 };
