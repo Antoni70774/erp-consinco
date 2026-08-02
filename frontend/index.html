@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ERP · Acesso ao Sistema</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="login-body">
+  <div class="login-wrap">
+    <div class="login-brand">
+      <div class="login-mark">ERP</div>
+      <div>
+        <div class="login-title">Sistema de Gestão</div>
+        <div class="login-sub">Fundação · Estoque · Vendas · Financeiro</div>
+      </div>
+    </div>
+
+    <form id="loginForm" class="login-card">
+      <label class="field">
+        <span>Usuário</span>
+        <input type="text" id="login" autocomplete="username" required value="admin">
+      </label>
+      <label class="field">
+        <span>Senha</span>
+        <input type="password" id="senha" autocomplete="current-password" required value="admin123">
+      </label>
+      <div id="loginErro" class="error-msg" hidden></div>
+      <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+      <div class="login-hint">Usuário padrão: <code>admin</code> · Senha: <code>admin123</code></div>
+    </form>
+  </div>
+
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script>
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const login = document.getElementById('login').value.trim();
+  const senha = document.getElementById('senha').value;
+  const erroBox = document.getElementById('loginErro');
+  erroBox.hidden = true;
+  try {
+    const data = await API.login(login, senha);
+    localStorage.setItem('erp_token', data.access_token);
+    localStorage.setItem('erp_usuario', JSON.stringify(data.usuario));
+    window.location.href = 'app.html';
+  } catch (err) {
+    erroBox.textContent = err.message || 'Falha ao entrar. Verifique usuário e senha.';
+    erroBox.hidden = false;
+  }
+});
+</script>
+</body>
+</html>

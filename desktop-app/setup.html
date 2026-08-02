@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Configuração Inicial · ERP</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    background: radial-gradient(circle at 20% 20%, #1c2440, #0b0e1a 70%);
+    -webkit-app-region: drag;
+  }
+  .card {
+    -webkit-app-region: no-drag;
+    background: #fff; width: 400px; border-radius: 14px; padding: 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+  .mark {
+    width: 40px; height: 40px; border-radius: 9px; background: linear-gradient(135deg,#3454d1,#7c8ef7);
+    color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px;
+  }
+  h1 { font-size: 15px; margin: 0; color: #171a2b; }
+  p.sub { font-size: 12px; color: #9096a8; margin: 2px 0 0; }
+  label { display: block; font-size: 12.5px; font-weight: 600; color: #5a6072; margin: 16px 0 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 7px; border: 1px solid #dfe3ea; font-size: 13.5px; outline: none;
+  }
+  input:focus { border-color: #3454d1; }
+  button {
+    margin-top: 20px; width: 100%; padding: 11px; border: none; border-radius: 7px;
+    background: #3454d1; color: #fff; font-weight: 700; font-size: 13.5px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  .hint { font-size: 11px; color: #9096a8; margin-top: 14px; text-align: center; line-height: 1.5; }
+  .err { display:none; background:#fbe9e9; color:#c23b3b; padding:8px 10px; border-radius:6px; font-size:12.5px; margin-top:12px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand">
+      <div class="mark">ERP</div>
+      <div>
+        <h1>Configuração inicial</h1>
+        <p class="sub">Informe o endereço do sistema na nuvem</p>
+      </div>
+    </div>
+
+    <label for="url">Endereço do servidor (fornecido pela sua empresa)</label>
+    <input type="text" id="url" placeholder="ex: erp-clientex.up.railway.app" autofocus>
+
+    <div id="erro" class="err"></div>
+
+    <button id="btnConectar">Conectar</button>
+    <div class="hint">Esse endereço só precisa ser digitado uma vez neste computador.<br>Os dados ficam salvos na nuvem, não neste PC.</div>
+  </div>
+
+<script>
+  const input = document.getElementById('url');
+  const erro = document.getElementById('erro');
+
+  document.getElementById('btnConectar').addEventListener('click', conectar);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') conectar(); });
+
+  async function conectar() {
+    const url = input.value.trim();
+    if (!url) {
+      erro.textContent = 'Digite o endereço do servidor.';
+      erro.style.display = 'block';
+      return;
+    }
+    erro.style.display = 'none';
+    await window.erpDesktop.salvarServidor(url);
+  }
+</script>
+</body>
+</html>

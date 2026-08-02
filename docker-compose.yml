@@ -1,0 +1,54 @@
+services:
+  db:
+    image: postgres:16
+    container_name: erp_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: erp_user
+      POSTGRES_PASSWORD: erp_pass
+      POSTGRES_DB: erp_consinco
+    ports:
+      - "5432:5432"
+    volumes:
+      - erp_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp_user -d erp_consinco"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: erp_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://erp_user:erp_pass@db:5432/erp_consinco
+      SECRET_KEY: "troque-esta-chave-por-uma-bem-forte-em-producao"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    image: nginx:alpine
+    container_name: erp_frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  adminer:
+    image: adminer
+    container_name: erp_adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - db
+
+volumes:
+  erp_db_data:
