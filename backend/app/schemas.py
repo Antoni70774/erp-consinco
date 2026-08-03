@@ -343,6 +343,7 @@ class InventarioAbrirIn(BaseModel):
     categoria_id: Optional[int] = None
     produto_ids: Optional[List[int]] = None  # usado quando tipo_abertura = PRODUTO
     tolerancia_critica_pct: float = 5
+    usuario_atribuido_id: Optional[int] = None
     observacao: Optional[str] = None
 
 
@@ -368,11 +369,22 @@ class InventarioOut(ORMBase):
     categoria_id: Optional[int] = None
     status: str
     tolerancia_critica_pct: Optional[float] = 5
+    usuario_atribuido_id: Optional[int] = None
     data_abertura: Optional[datetime] = None
     data_congelamento: Optional[datetime] = None
     data_fechamento: Optional[datetime] = None
     observacao: Optional[str] = None
     itens: List[InventarioItemOut] = []
+
+
+class InventarioAtribuirIn(BaseModel):
+    usuario_id: Optional[int] = None  # None = remove atribuição
+
+
+class InventarioBipagemIn(BaseModel):
+    codigo_barras: Optional[str] = None
+    codigo_produto: Optional[str] = None
+    quantidade_contada: float
 
 
 class InventarioContagemIn(BaseModel):
