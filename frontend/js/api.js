@@ -31,8 +31,8 @@ const API = {
     try { data = await res.json(); } catch (e) { /* corpo vazio */ }
 
     if (!res.ok) {
-      const msg = (data && (data.detail || data.message)) || `Erro ${res.status}`;
-      throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+      const bruto = data && (data.detail || data.message);
+      throw new Error(formatarMensagemErro(bruto, res.status));
     }
     return data;
   },
@@ -46,3 +46,25 @@ const API = {
     return this._request('POST', '/api/auth/login', { login, senha });
   },
 };
+
+// Traduz o formato de erro do FastAPI (que pode vir como string simples ou
+// como uma lista de objetos de validação) para uma frase legível ao usuário.
+function formatarMensagemErro(bruto, status) {
+  if (!bruto) return `Não foi possível completar a operação (erro ${status}). Tente novamente.`;
+  if (typeof bruto === 'string') return bruto;
+
+  if (Array.isArray(bruto)) {
+    const frases = bruto.map(item => {
+      if (item && typeof item === 'object' && item.msg) {
+        const campo = Array.isArray(item.loc) ? item.loc[item.loc.length - 1] : '';
+        return campo && campo !== 'body' ? `${campo}: ${item.msg}` : item.msg;
+      }
+      return typeof item === 'string' ? item : null;
+    }).filter(Boolean);
+    if (frases.length) return frases.join(' · ');
+  }
+
+  if (typeof bruto === 'object' && bruto.msg) return bruto.msg;
+
+  return `Não foi possível completar a operação (erro ${status}). Tente novamente ou avise o suporte.`;
+}
