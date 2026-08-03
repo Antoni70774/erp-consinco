@@ -18,11 +18,35 @@ def listar(empresa_id: int | None = None, status: str | None = None, db: Session
     return q.order_by(models.Inventario.id.desc()).all()
 
 
+@router.get("/minhas-tarefas", response_model=list[schemas.InventarioOut])
+def minhas_tarefas(usuario: models.Usuario = Depends(security.usuario_atual), db: Session = Depends(get_db)):
+    """Lista os inventários atribuídos ao usuário logado (tela do coletor)."""
+    return (
+        db.query(models.Inventario)
+        .options(joinedload(models.Inventario.itens))
+        .filter(models.Inventario.usuario_atribuido_id == usuario.id)
+        .filter(models.Inventario.status.in_(["ABERTO", "CONGELADO"]))
+        .order_by(models.Inventario.id.desc())
+        .all()
+    )
+
+
 @router.get("/{inventario_id}", response_model=schemas.InventarioOut)
 def obter(inventario_id: int, db: Session = Depends(get_db)):
     inv = db.query(models.Inventario).options(joinedload(models.Inventario.itens)).get(inventario_id)
     if not inv:
         raise HTTPException(404, "Inventário não encontrado")
+    return inv
+
+
+@router.put("/{inventario_id}/atribuir", response_model=schemas.InventarioOut)
+def atribuir(inventario_id: int, payload: schemas.InventarioAtribuirIn, db: Session = Depends(get_db)):
+    inv = db.get(models.Inventario, inventario_id)
+    if not inv:
+        raise HTTPException(404, "Inventário não encontrado")
+    inv.usuario_atribuido_id = payload.usuario_id
+    db.commit()
+    db.refresh(inv)
     return inv
 
 
@@ -56,6 +80,7 @@ def abrir(payload: schemas.InventarioAbrirIn, usuario: models.Usuario = Depends(
         categoria_id=payload.categoria_id,
         tolerancia_critica_pct=payload.tolerancia_critica_pct,
         usuario_abertura_id=usuario.id,
+        usuario_atribuido_id=payload.usuario_atribuido_id,
         observacao=payload.observacao,
         status="ABERTO",
     )
@@ -107,6 +132,61 @@ def descongelar(inventario_id: int, db: Session = Depends(get_db)):
     return inv
 
 
+@router.post("/{inventario_id}/bipagem", response_model=schemas.InventarioItemOut)
+def bipagem(inventario_id: int, payload: schemas.InventarioBipagemIn, db: Session = Depends(get_db)):
+    """
+    Fluxo do coletor: bipa o código de barras (ou digita o código do produto),
+    o sistema acha o item do inventário correspondente e já registra a
+    quantidade contada num único passo — sem precisar abrir telas ou listas.
+    """
+    inv = db.get(models.Inventario, inventario_id)
+    if not inv:
+        raise HTTPException(404, "Inventário não encontrado")
+    if inv.status == "FECHADO":
+        raise HTTPException(400, "Inventário já fechado.")
+
+    query_produto = db.query(models.Produto)
+    if payload.codigo_barras:
+        produto = query_produto.filter(models.Produto.codigo_barras == payload.codigo_barras).first()
+    elif payload.codigo_produto:
+        produto = query_produto.filter(models.Produto.codigo == payload.codigo_produto).first()
+    else:
+        raise HTTPException(400, "Informe o código de barras ou o código do produto.")
+
+    if not produto:
+        raise HTTPException(404, "Produto não encontrado com esse código.")
+
+    item = (
+        db.query(models.InventarioItem)
+        .filter_by(inventario_id=inventario_id, produto_id=produto.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(404, f"O produto '{produto.descricao}' não faz parte deste inventário.")
+
+    item.quantidade_contada = payload.quantidade_contada
+    item.diferenca = float(payload.quantidade_contada) - float(item.quantidade_sistema)
+    item.valor_diferenca = item.diferenca * float(item.valor_unitario or 0)
+    item.contado_em = datetime.utcnow()
+
+    base = float(item.quantidade_sistema) or 1
+    divergencia_pct = abs(item.diferenca) / base * 100
+    tolerancia = float(inv.tolerancia_critica_pct or 5)
+    if float(item.quantidade_sistema) == 0 and float(payload.quantidade_contada) > 0:
+        item.critica = True
+        item.critica_motivo = "Produto sem saldo no sistema, mas contado fisicamente."
+    elif divergencia_pct > tolerancia:
+        item.critica = True
+        item.critica_motivo = f"Divergência de {divergencia_pct:.1f}% (tolerância: {tolerancia:.0f}%)."
+    else:
+        item.critica = False
+        item.critica_motivo = None
+
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 @router.put("/{inventario_id}/itens/{item_id}/contagem", response_model=schemas.InventarioItemOut)
 def registrar_contagem(inventario_id: int, item_id: int, payload: schemas.InventarioContagemIn, db: Session = Depends(get_db)):
     inv = db.get(models.Inventario, inventario_id)
@@ -153,9 +233,9 @@ def listar_criticas(inventario_id: int, db: Session = Depends(get_db)):
 def fechar(inventario_id: int, ignorar_criticas: bool = False,
            usuario: models.Usuario = Depends(security.usuario_atual), db: Session = Depends(get_db)):
     """
-    Fecha o inventário: aplica ajustes de sobra/falta automaticamente,
-    mesmo com divergências. Se houver críticas, marca o inventário como
-    fechado com divergências (campo opcional).
+    Fecha o inventário: para cada item com diferença, gera um movimento de
+    ajuste (sobra ou falta) usando os tipos de operação INV-A / INV-F,
+    atualiza o saldo consolidado e o campo estoque_atual do produto.
     """
     inv = db.query(models.Inventario).options(joinedload(models.Inventario.itens)).get(inventario_id)
     if not inv:
@@ -167,15 +247,13 @@ def fechar(inventario_id: int, ignorar_criticas: bool = False,
     if pendentes:
         raise HTTPException(400, f"Existem {len(pendentes)} item(ns) sem contagem registrada.")
 
-    # Verifica críticas, mas não bloqueia o fechamento.
     criticas_abertas = [i for i in inv.itens if i.critica]
-    if criticas_abertas:
-        # Marca o inventário como fechado com divergências se o modelo tiver o campo.
-        try:
-            setattr(inv, "fechado_com_divergencias", True)
-        except Exception:
-            # se o atributo não existir, ignora silenciosamente
-            pass
+    if criticas_abertas and not ignorar_criticas:
+        raise HTTPException(
+            409,
+            f"Existem {len(criticas_abertas)} item(ns) com crítica de divergência. "
+            f"Revise-os ou feche com ignorar_criticas=true para prosseguir mesmo assim.",
+        )
 
     tipo_sobra = db.query(models.TipoOperacao).filter_by(codigo="INV-A").first()
     tipo_falta = db.query(models.TipoOperacao).filter_by(codigo="INV-F").first()
@@ -190,27 +268,17 @@ def fechar(inventario_id: int, ignorar_criticas: bool = False,
                 .first()
             )
             if not saldo:
-                saldo = models.EstoqueSaldo(
-                    empresa_id=inv.empresa_id,
-                    produto_id=item.produto_id,
-                    quantidade=0,
-                    valor_medio=item.valor_unitario or 0
-                )
+                saldo = models.EstoqueSaldo(empresa_id=inv.empresa_id, produto_id=item.produto_id, quantidade=0, valor_medio=item.valor_unitario or 0)
                 db.add(saldo)
                 db.flush()
 
-            tipo = tipo_sobra if float(item.diferenca) > 0 else tipo_falta
-            # A contagem física passa a ser a verdade
-            saldo.quantidade = float(item.quantidade_contada)
+            tipo = tipo_sobra if item.diferenca > 0 else tipo_falta
+            saldo.quantidade = float(item.quantidade_contada)  # contagem física passa a ser a verdade
 
             db.add(models.EstoqueMovimento(
-                empresa_id=inv.empresa_id,
-                produto_id=item.produto_id,
-                tipo_operacao_id=tipo.id,
-                documento_origem=f"INV-{inv.id}",
-                quantidade=abs(float(item.diferenca)),
-                valor_unitario=item.valor_unitario or 0,
-                saldo_apos=saldo.quantidade,
+                empresa_id=inv.empresa_id, produto_id=item.produto_id, tipo_operacao_id=tipo.id,
+                documento_origem=f"INV-{inv.id}", quantidade=abs(float(item.diferenca)),
+                valor_unitario=item.valor_unitario or 0, saldo_apos=saldo.quantidade,
                 usuario_id=usuario.id,
             ))
             item.ajuste_aplicado = True
