@@ -387,6 +387,7 @@ class Inventario(Base):
     tolerancia_critica_pct = Column(Numeric(5, 2), default=5)  # % de divergência tolerada antes de virar crítica
     usuario_abertura_id = Column(Integer, ForeignKey("erp.usuarios.id"))
     usuario_fechamento_id = Column(Integer, ForeignKey("erp.usuarios.id"))
+    usuario_atribuido_id = Column(Integer, ForeignKey("erp.usuarios.id"))  # quem vai contar (tarefa do coletor)
     data_abertura = Column(DateTime, server_default=func.now())
     data_congelamento = Column(DateTime)
     data_fechamento = Column(DateTime)
