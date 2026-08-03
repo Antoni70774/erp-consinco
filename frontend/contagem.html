@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Contagem de Inventário</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  body { background: var(--bg-app); }
+  .ctg-shell { max-width: 480px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; background: #fff; }
+  .ctg-topbar {
+    background: var(--bg-sidebar); color: #fff; padding: 16px 18px; display: flex; align-items: center; gap: 10px;
+  }
+  .ctg-topbar .login-mark { width: 34px; height: 34px; font-size: 11px; }
+  .ctg-topbar-title { font-weight: 700; font-size: 14px; }
+  .ctg-topbar-sub { font-size: 11px; color: #9096b8; }
+  .ctg-body { flex: 1; padding: 18px; overflow-y: auto; }
+
+  .ctg-task-card {
+    border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 12px; cursor: pointer;
+  }
+  .ctg-task-card:active { background: #f7f9ff; }
+  .ctg-task-title { font-weight: 700; font-size: 14.5px; }
+  .ctg-task-meta { font-size: 12px; color: var(--ink-faint); margin-top: 4px; }
+
+  .ctg-scan-input {
+    width: 100%; font-size: 22px; padding: 16px; border-radius: 10px; border: 2px solid var(--accent);
+    text-align: center; font-family: var(--font-mono); margin-bottom: 14px;
+  }
+  .ctg-qtd-input {
+    width: 100%; font-size: 28px; padding: 16px; border-radius: 10px; border: 2px solid var(--border);
+    text-align: center; font-family: var(--font-mono); margin-bottom: 14px;
+  }
+  .ctg-produto-encontrado {
+    background: var(--accent-soft); border-radius: 10px; padding: 14px; margin-bottom: 14px; text-align: center;
+  }
+  .ctg-produto-nome { font-weight: 700; font-size: 15px; }
+  .ctg-produto-sistema { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
+  .ctg-btn-confirmar {
+    width: 100%; padding: 18px; font-size: 17px; border-radius: 10px; border: none;
+    background: var(--green); color: #fff; font-weight: 700;
+  }
+  .ctg-btn-confirmar:active { filter: brightness(0.9); }
+  .ctg-recentes { margin-top: 20px; }
+  .ctg-recente-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eef0f5; font-size: 13px; }
+  .ctg-voltar { color: #9096b8; font-size: 12.5px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div class="ctg-shell">
+    <div class="ctg-topbar">
+      <div class="login-mark">ERP</div>
+      <div style="flex:1">
+        <div class="ctg-topbar-title" id="ctgTitulo">Minhas Contagens</div>
+        <div class="ctg-topbar-sub" id="ctgSubtitulo">Selecione uma tarefa</div>
+      </div>
+      <div id="ctgVoltar" class="ctg-voltar" style="display:none">← Voltar</div>
+    </div>
+    <div class="ctg-body" id="ctgBody">
+      <div style="color:#9096a8; text-align:center; padding-top:40px">Carregando tarefas...</div>
+    </div>
+  </div>
+
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script>
+if (!localStorage.getItem('erp_token')) window.location.href = 'index.html';
+
+const ctgBody = document.getElementById('ctgBody');
+const ctgTitulo = document.getElementById('ctgTitulo');
+const ctgSubtitulo = document.getElementById('ctgSubtitulo');
+const ctgVoltar = document.getElementById('ctgVoltar');
+
+let tarefaAtual = null;
+let produtoAtual = null;
+const contadosNestaSessao = [];
+
+async function carregarTarefas() {
+  ctgVoltar.style.display = 'none';
+  ctgTitulo.textContent = 'Minhas Contagens';
+  ctgSubtitulo.textContent = 'Selecione uma tarefa';
+  ctgBody.innerHTML = `<div style="color:#9096a8; text-align:center; padding-top:20px">Carregando...</div>`;
+
+  try {
+    const tarefas = await API.get('/api/inventario/minhas-tarefas');
+    if (!tarefas.length) {
+      ctgBody.innerHTML = `<div class="empty-state"><div class="empty-state-title">Nenhuma tarefa atribuída</div>Peça ao administrador para atribuir um inventário a você.</div>`;
+      return;
+    }
+    ctgBody.innerHTML = tarefas.map(t => {
+      const contados = t.itens.filter(i => i.quantidade_contada !== null && i.quantidade_contada !== undefined).length;
+      return `<div class="ctg-task-card" data-tarefa="${t.id}">
+        <div class="ctg-task-title">#${t.id} — ${t.descricao}</div>
+        <div class="ctg-task-meta">${t.tipo_abertura} · ${contados}/${t.itens.length} contados · ${t.status}</div>
+      </div>`;
+    }).join('');
+    ctgBody.querySelectorAll('[data-tarefa]').forEach(el => el.addEventListener('click', () => abrirTarefa(Number(el.dataset.tarefa))));
+  } catch (e) {
+    ctgBody.innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+async function abrirTarefa(id) {
+  tarefaAtual = await API.get(`/api/inventario/${id}`);
+  ctgVoltar.style.display = 'block';
+  ctgTitulo.textContent = `#${tarefaAtual.id} — ${tarefaAtual.descricao}`;
+  ctgSubtitulo.textContent = 'Bipe o código de barras ou digite o código do produto';
+  produtoAtual = null;
+  renderTelaBipagem();
+}
+
+function renderTelaBipagem() {
+  const contados = tarefaAtual.itens.filter(i => i.quantidade_contada !== null && i.quantidade_contada !== undefined).length;
+  ctgBody.innerHTML = `
+    <div style="text-align:center; margin-bottom:14px; color:var(--ink-faint); font-size:12.5px">${contados}/${tarefaAtual.itens.length} itens contados</div>
+    <input type="text" id="ctgScan" class="ctg-scan-input" placeholder="Bipe ou digite o código" autofocus autocomplete="off">
+    <div id="ctgProdutoArea"></div>
+    <div class="ctg-recentes" id="ctgRecentes"></div>
+  `;
+  renderRecentes();
+
+  const scanInput = document.getElementById('ctgScan');
+  scanInput.focus();
+  scanInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && scanInput.value.trim()) {
+      buscarProduto(scanInput.value.trim());
+      scanInput.value = '';
+    }
+  });
+}
+
+function renderRecentes() {
+  const area = document.getElementById('ctgRecentes');
+  if (!area) return;
+  if (!contadosNestaSessao.length) { area.innerHTML = ''; return; }
+  area.innerHTML = `<div style="font-size:12px; color:var(--ink-faint); margin-bottom:6px">Contados nesta sessão:</div>` +
+    contadosNestaSessao.slice(-8).reverse().map(c => `
+      <div class="ctg-recente-item">
+        <span>${c.descricao}</span>
+        <span class="mono">${c.quantidade} ${c.critica ? '⚠️' : '✓'}</span>
+      </div>`).join('');
+}
+
+async function buscarProduto(codigo) {
+  // Tenta achar localmente entre os itens do inventário (pelo código de barras
+  // do produto ou pelo código interno) antes de decidir qual campo enviar.
+  document.getElementById('ctgProdutoArea').innerHTML = `<div style="text-align:center; color:#9096a8">Buscando...</div>`;
+  try {
+    const produtos = await API.get(`/api/produtos?q=${encodeURIComponent(codigo)}`);
+    const produto = produtos.find(p => p.codigo_barras === codigo) || produtos.find(p => p.codigo === codigo) || produtos[0];
+    if (!produto) {
+      document.getElementById('ctgProdutoArea').innerHTML = `<div class="error-msg">Nenhum produto encontrado com esse código.</div>`;
+      return;
+    }
+    const item = tarefaAtual.itens.find(i => i.produto_id === produto.id);
+    if (!item) {
+      document.getElementById('ctgProdutoArea').innerHTML = `<div class="error-msg">"${produto.descricao}" não faz parte deste inventário.</div>`;
+      return;
+    }
+    produtoAtual = { produto, item };
+    document.getElementById('ctgProdutoArea').innerHTML = `
+      <div class="ctg-produto-encontrado">
+        <div class="ctg-produto-nome">${produto.descricao}</div>
+        <div class="ctg-produto-sistema">Código: ${produto.codigo} · Estoque no sistema: ${UI.fmtNum(item.quantidade_sistema, 2)}</div>
+      </div>
+      <input type="number" step="0.001" id="ctgQtd" class="ctg-qtd-input" placeholder="Quantidade contada" inputmode="decimal">
+      <button class="ctg-btn-confirmar" id="ctgConfirmar">Confirmar Contagem</button>
+    `;
+    const qtdInput = document.getElementById('ctgQtd');
+    qtdInput.focus();
+    qtdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmarContagem(); });
+    document.getElementById('ctgConfirmar').addEventListener('click', confirmarContagem);
+  } catch (e) {
+    document.getElementById('ctgProdutoArea').innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+}
+
+async function confirmarContagem() {
+  const qtdInput = document.getElementById('ctgQtd');
+  const valor = Number(qtdInput.value);
+  if (qtdInput.value === '' || isNaN(valor) || valor < 0) { UI.toast('Informe uma quantidade válida.', 'err'); return; }
+
+  try {
+    const atualizado = await API.post(`/api/inventario/${tarefaAtual.id}/bipagem`, {
+      codigo_barras: produtoAtual.produto.codigo_barras || null,
+      codigo_produto: produtoAtual.produto.codigo_barras ? null : produtoAtual.produto.codigo,
+      quantidade_contada: valor,
+    });
+    const idx = tarefaAtual.itens.findIndex(i => i.id === atualizado.id);
+    tarefaAtual.itens[idx] = atualizado;
+    contadosNestaSessao.push({ descricao: produtoAtual.produto.descricao, quantidade: valor, critica: atualizado.critica });
+    UI.toast(atualizado.critica ? 'Contado — divergência marcada para revisão.' : 'Contado com sucesso!');
+    produtoAtual = null;
+    renderTelaBipagem();
+  } catch (e) {
+    UI.toast(e.message, 'err');
+  }
+}
+
+ctgVoltar.addEventListener('click', carregarTarefas);
+carregarTarefas();
+</script>
+</body>
+</html>
