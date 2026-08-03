@@ -1332,10 +1332,12 @@ async function renderInventario() {
               footerHtml: `<button class="btn btn-secondary" data-close>Cancelar</button><button class="btn btn-primary" id="btnSalvarAtribuicao">Salvar</button>`,
               onMount: (ov2) => ov2.querySelector('#btnSalvarAtribuicao').addEventListener('click', async () => {
                 const usuarioId = ov2.querySelector('#atribuirSelect').value;
-                await API.put(`/api/inventario/${inv.id}/atribuir`, { usuario_id: usuarioId ? Number(usuarioId) : null });
-                UI.toast('Atribuição atualizada.');
-                UI.closeModal();
-                load(); abrirDetalhe(inv.id);
+                try {
+                  await API.put(`/api/inventario/${inv.id}/atribuir`, { usuario_id: usuarioId ? Number(usuarioId) : null });
+                  UI.toast('Atribuição atualizada.');
+                  UI.closeModal();
+                  load(); abrirDetalhe(inv.id);
+                } catch (e) { UI.toast(e.message, 'err'); }
               }),
             });
           });
@@ -1360,16 +1362,20 @@ async function renderInventario() {
 
         if (ov.querySelector('#btnCongelar')) {
           ov.querySelector('#btnCongelar').addEventListener('click', async () => {
-            await API.post(`/api/inventario/${inv.id}/congelar`);
-            UI.toast('Estoque congelado para este inventário.');
-            UI.closeModal(); load(); abrirDetalhe(inv.id);
+            try {
+              await API.post(`/api/inventario/${inv.id}/congelar`);
+              UI.toast('Estoque congelado para este inventário.');
+              UI.closeModal(); load(); abrirDetalhe(inv.id);
+            } catch (e) { UI.toast(e.message, 'err'); }
           });
         }
         if (ov.querySelector('#btnDescongelar')) {
           ov.querySelector('#btnDescongelar').addEventListener('click', async () => {
-            await API.post(`/api/inventario/${inv.id}/descongelar`);
-            UI.toast('Inventário descongelado.');
-            UI.closeModal(); load(); abrirDetalhe(inv.id);
+            try {
+              await API.post(`/api/inventario/${inv.id}/descongelar`);
+              UI.toast('Inventário descongelado.');
+              UI.closeModal(); load(); abrirDetalhe(inv.id);
+            } catch (e) { UI.toast(e.message, 'err'); }
           });
         }
         if (ov.querySelector('#btnFecharInv')) {
