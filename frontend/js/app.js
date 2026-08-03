@@ -34,6 +34,7 @@ const optProdutos = async () => (await API.get('/api/produtos')).map(p => ({ val
 const optCategorias = async () => (await API.get('/api/categorias-produto')).map(c => ({ value: c.id, label: c.descricao }));
 const optPerfis = async () => [{ value: '', label: '(sem perfil)' }];
 const optTiposOperacao = async () => (await API.get('/api/tipos-operacao')).map(t => ({ value: t.id, label: `${t.codigo} · CFOP ${t.cfop} · ${t.descricao}` }));
+const optUsuarios = async () => (await API.get('/api/usuarios')).map(u => ({ value: u.id, label: `${u.nome} (${u.login})` }));
 
 // -------- Configurações de CRUD por entidade --------
 const CRUD_CONFIGS = {
@@ -1175,7 +1176,10 @@ async function renderInventario() {
   content.innerHTML = `
     <div class="table-toolbar">
       <input class="search-input" id="invFiltroStatus" placeholder="Filtrar por status (ABERTO, CONGELADO, FECHADO...)">
-      <button class="btn btn-primary" id="btnNovoInventario">+ Abrir Inventário</button>
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-secondary" id="btnAbrirContagem">📱 Tela de Contagem (coletor)</button>
+        <button class="btn btn-primary" id="btnNovoInventario">+ Abrir Inventário</button>
+      </div>
     </div>
     <div class="table-wrap"><table class="data-table">
       <thead><tr><th>#</th><th>Descrição</th><th>Tipo</th><th>Empresa</th><th>Status</th><th>Abertura</th><th style="width:110px">Ações</th></tr></thead>
@@ -1184,6 +1188,7 @@ async function renderInventario() {
   `;
 
   const [empresas, categorias, produtos] = await Promise.all([optEmpresas(), optCategorias(), optProdutos()]);
+  const usuarios = await optUsuarios();
   const empresaMap = Object.fromEntries(empresas.map(e => [e.value, e.label]));
 
   function statusTag(s) {
@@ -1209,6 +1214,8 @@ async function renderInventario() {
     tbody.querySelectorAll('[data-abrir]').forEach(b => b.addEventListener('click', () => abrirDetalhe(Number(b.dataset.abrir))));
   }
 
+  document.getElementById('btnAbrirContagem').addEventListener('click', () => window.open('contagem.html', '_blank'));
+
   document.getElementById('btnNovoInventario').addEventListener('click', () => {
     let tipoAtual = 'GERAL';
     const overlay = UI.openModal({
@@ -1228,6 +1235,9 @@ async function renderInventario() {
             <select name="categoria_id">${categorias.map(c => `<option value="${c.value}">${c.label}</option>`).join('')}</select>
           </label>
           <label class="field"><span>Tolerância de Crítica (%)</span><input type="number" name="tolerancia_critica_pct" value="5" step="0.1"></label>
+          <label class="field"><span>Atribuir contagem a (opcional)</span>
+            <select name="usuario_atribuido_id"><option value="">Ninguém (eu mesmo conto pelo painel)</option>${usuarios.map(u => `<option value="${u.value}">${u.label}</option>`).join('')}</select>
+          </label>
           <label class="field" id="campoProdutos" style="display:none; grid-column:span 2"><span>Produtos (Ctrl/Cmd+clique para selecionar vários)</span>
             <select name="produto_ids" multiple size="6">${produtos.map(p => `<option value="${p.value}">${p.label}</option>`).join('')}</select>
           </label>
@@ -1251,6 +1261,7 @@ async function renderInventario() {
               categoria_id: fd.get('categoria_id') ? Number(fd.get('categoria_id')) : null,
               produto_ids: produtoIds.length ? produtoIds : null,
               tolerancia_critica_pct: Number(fd.get('tolerancia_critica_pct')) || 5,
+              usuario_atribuido_id: fd.get('usuario_atribuido_id') ? Number(fd.get('usuario_atribuido_id')) : null,
             });
             UI.toast('Inventário aberto com sucesso.');
             UI.closeModal();
@@ -1285,6 +1296,7 @@ async function renderInventario() {
     const totalItens = inv.itens.length;
     const contados = inv.itens.filter(i => i.quantidade_contada !== null && i.quantidade_contada !== undefined).length;
     const criticas = inv.itens.filter(i => i.critica).length;
+    const atribuidoNome = inv.usuario_atribuido_id ? (usuarios.find(u => u.value === inv.usuario_atribuido_id)?.label || `Usuário #${inv.usuario_atribuido_id}`) : null;
 
     const overlay = UI.openModal({
       title: `Inventário #${inv.id} — ${inv.descricao}`,
@@ -1293,6 +1305,7 @@ async function renderInventario() {
           <span class="tag ${inv.status === 'FECHADO' ? 'tag-green' : inv.status === 'CONGELADO' ? 'tag-red' : 'tag-amber'}">${inv.status}</span>
           <span class="tag tag-gray">${contados}/${totalItens} contados</span>
           ${criticas > 0 ? `<span class="tag tag-red">${criticas} crítica(s)</span>` : ''}
+          ${atribuidoNome ? `<span class="tag tag-gray">Atribuído: ${atribuidoNome}</span>` : ''}
         </div>
         <div class="table-wrap" style="max-height:400px">
           <table class="data-table">
@@ -1303,11 +1316,30 @@ async function renderInventario() {
       `,
       footerHtml: `
         <button class="btn btn-secondary" data-close>Fechar Janela</button>
+        ${inv.status !== 'FECHADO' ? '<button class="btn btn-secondary" id="btnAtribuir">Atribuir Contagem</button>' : ''}
         ${inv.status === 'ABERTO' ? '<button class="btn btn-secondary" id="btnCongelar">Congelar Estoque</button>' : ''}
         ${inv.status === 'CONGELADO' ? '<button class="btn btn-secondary" id="btnDescongelar">Descongelar</button>' : ''}
         ${inv.status !== 'FECHADO' ? '<button class="btn btn-primary" id="btnFecharInv">Fechar Inventário</button>' : ''}
       `,
       onMount: (ov) => {
+        if (ov.querySelector('#btnAtribuir')) {
+          ov.querySelector('#btnAtribuir').addEventListener('click', () => {
+            UI.openModal({
+              title: 'Atribuir Contagem',
+              bodyHtml: `<label class="field"><span>Usuário responsável</span>
+                <select id="atribuirSelect"><option value="">Ninguém</option>${usuarios.map(u => `<option value="${u.value}" ${u.value === inv.usuario_atribuido_id ? 'selected' : ''}>${u.label}</option>`).join('')}</select>
+              </label>`,
+              footerHtml: `<button class="btn btn-secondary" data-close>Cancelar</button><button class="btn btn-primary" id="btnSalvarAtribuicao">Salvar</button>`,
+              onMount: (ov2) => ov2.querySelector('#btnSalvarAtribuicao').addEventListener('click', async () => {
+                const usuarioId = ov2.querySelector('#atribuirSelect').value;
+                await API.put(`/api/inventario/${inv.id}/atribuir`, { usuario_id: usuarioId ? Number(usuarioId) : null });
+                UI.toast('Atribuição atualizada.');
+                UI.closeModal();
+                load(); abrirDetalhe(inv.id);
+              }),
+            });
+          });
+        }
         function ligarSalvarItens() {
           ov.querySelectorAll('[data-salvar-item]').forEach(btn => btn.addEventListener('click', async () => {
             const itemId = Number(btn.dataset.salvarItem);
@@ -1342,22 +1374,63 @@ async function renderInventario() {
         }
         if (ov.querySelector('#btnFecharInv')) {
           ov.querySelector('#btnFecharInv').addEventListener('click', async () => {
-            if (!confirm('Fechar o inventário vai gerar ajustes de estoque automaticamente para todas as diferenças. Confirma?')) return;
             try {
               await API.post(`/api/inventario/${inv.id}/fechar`);
               UI.toast('Inventário fechado. Ajustes de estoque aplicados.');
               UI.closeModal(); load();
             } catch (e) {
-              if (confirm(`${e.message}\n\nDeseja fechar mesmo assim, ignorando as críticas?`)) {
-                await API.post(`/api/inventario/${inv.id}/fechar?ignorar_criticas=true`);
-                UI.toast('Inventário fechado (críticas ignoradas).');
-                UI.closeModal(); load();
+              // Se o motivo do bloqueio for críticas pendentes, mostra uma tela clara
+              // com a lista de itens em vez de um confirm() nativo confuso.
+              const itensComCritica = inv.itens.filter(i => i.critica);
+              if (itensComCritica.length) {
+                mostrarRevisaoCriticas(itensComCritica);
+              } else {
+                UI.toast(e.message, 'err');
               }
             }
           });
         }
       },
     });
+
+    function mostrarRevisaoCriticas(itensComCritica) {
+      UI.openModal({
+        title: `Revisar Críticas antes de Fechar — Inventário #${inv.id}`,
+        bodyHtml: `
+          <p style="color:var(--ink-soft); font-size:13px; margin-top:0">
+            ${itensComCritica.length} item(ns) tiveram uma diferença de contagem maior que a tolerância
+            configurada (${inv.tolerancia_critica_pct || 5}%). Revise antes de fechar — uma vez fechado,
+            os ajustes de estoque são aplicados automaticamente.
+          </p>
+          <div class="table-wrap"><table class="data-table">
+            <thead><tr><th>Produto</th><th>Sistema</th><th>Contado</th><th>Diferença</th><th>Motivo</th></tr></thead>
+            <tbody>${itensComCritica.map(item => {
+              const prod = produtos.find(p => p.value === item.produto_id);
+              return `<tr class="critica-row">
+                <td>${prod ? prod.label : item.produto_id}</td>
+                <td class="mono">${UI.fmtNum(item.quantidade_sistema, 2)}</td>
+                <td class="mono">${UI.fmtNum(item.quantidade_contada, 2)}</td>
+                <td class="mono">${UI.fmtNum(item.diferenca, 2)}</td>
+                <td>${item.critica_motivo || '—'}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>`,
+        footerHtml: `
+          <button class="btn btn-secondary" data-close>Voltar e Revisar Contagens</button>
+          <button class="btn btn-danger" id="btnForcarFechamento">Fechar Mesmo Assim</button>
+        `,
+        onMount: (ov2) => {
+          ov2.querySelector('#btnForcarFechamento').addEventListener('click', async () => {
+            try {
+              await API.post(`/api/inventario/${inv.id}/fechar?ignorar_criticas=true`);
+              UI.toast('Inventário fechado com críticas ignoradas. Ajustes de estoque aplicados.');
+              UI.closeModal();
+              load();
+            } catch (e) { UI.toast(e.message, 'err'); }
+          });
+        },
+      });
+    }
   }
 
   let t;
